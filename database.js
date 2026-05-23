@@ -1,35 +1,25 @@
 const Database = require("better-sqlite3");
 
-// creates DB file (Railway-safe)
 const db = new Database("letterboxd.db");
 
-// create table if it doesn't exist
+// users table
 db.prepare(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    letterboxd TEXT
-  )
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  letterboxd TEXT
+)
 `).run();
 
-// save or update user
-function saveUser(discordId, letterboxd) {
-  const stmt = db.prepare(`
+function saveUser(id, letterboxd) {
+  db.prepare(`
     INSERT INTO users (id, letterboxd)
     VALUES (?, ?)
     ON CONFLICT(id) DO UPDATE SET letterboxd=excluded.letterboxd
-  `);
-
-  stmt.run(discordId, letterboxd);
+  `).run(id, letterboxd);
 }
 
-// get user
-function getUser(discordId) {
-  return db.prepare(`
-    SELECT * FROM users WHERE id = ?
-  `).get(discordId);
+function getUser(id) {
+  return db.prepare(`SELECT * FROM users WHERE id = ?`).get(id);
 }
 
-module.exports = {
-  saveUser,
-  getUser
-};
+module.exports = { saveUser, getUser };
