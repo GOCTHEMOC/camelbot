@@ -1,32 +1,22 @@
-const OpenAI = require('openai');
+const OpenAI = require("openai");
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+let openai = null;
 
-async function chatAI(message) {
-  try {
-    const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are Camelbot, a concise movie-focused Discord assistant. You discuss films, directors, ratings, and recommendations. Keep responses short and useful."
-        },
-        {
-          role: "user",
-          content: message
-        }
-      ]
-    });
+if (process.env.OPENAI_API_KEY) {
+  openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
+  });
+}
 
-    return response.choices[0].message.content;
+async function chatAI(prompt) {
+  if (!openai) return "AI is not enabled.";
 
-  } catch (err) {
-    console.error(err);
-    return "AI error.";
-  }
+  const res = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: prompt }]
+  });
+
+  return res.choices[0].message.content;
 }
 
 module.exports = { chatAI };
