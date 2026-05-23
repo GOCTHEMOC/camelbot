@@ -1,19 +1,35 @@
-const sqlite3 = require('sqlite3').verbose();
+const Database = require("better-sqlite3");
 
-const db = new sqlite3.Database('./users.db', (err) => {
-  if (err) {
-    console.error("DB connection error:", err);
-  } else {
-    console.log("Database connected.");
-  }
-});
+// creates DB file (Railway-safe)
+const db = new Database("letterboxd.db");
 
-db.run(`
+// create table if it doesn't exist
+db.prepare(`
   CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    discord_id TEXT UNIQUE,
-    letterboxd_url TEXT UNIQUE
+    id TEXT PRIMARY KEY,
+    letterboxd TEXT
   )
-`);
+`).run();
 
-module.exports = db;
+// save or update user
+function saveUser(discordId, letterboxd) {
+  const stmt = db.prepare(`
+    INSERT INTO users (id, letterboxd)
+    VALUES (?, ?)
+    ON CONFLICT(id) DO UPDATE SET letterboxd=excluded.letterboxd
+  `);
+
+  stmt.run(discordId, letterboxd);
+}
+
+// get user
+function getUser(discordId) {
+  return db.prepare(`
+    SELECT * FROM users WHERE id = ?
+  `).get(discordId);
+}
+
+module.exports = {
+  saveUser,
+  getUser
+};
