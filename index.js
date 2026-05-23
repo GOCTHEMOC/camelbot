@@ -13,16 +13,22 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// store verification message ID
-let verifyMessageId = null;
+// CONFIG (PUT REAL IDS IN .env)
+const VERIFY_CHANNEL_ID = process.env.VERIFY_CHANNEL_ID;
+const LETTERBOXD_CHANNEL_ID = process.env.LETTERBOXD_CHANNEL_ID;
+const VERIFIED_ROLE_NAME = "verified";
 
-// SEND VERIFY MESSAGE ON START
+let verifyMessageId = null;
+let welcomeSent = false;
+
+/* ---------------- READY EVENT ---------------- */
 client.once("ready", async () => {
   console.log(`Camelbot is online as ${client.user.tag}`);
 
-  const channel = client.channels.cache.find(c => c.name === "verify");
+  if (welcomeSent) return;
+  welcomeSent = true;
 
-  if (!channel) return console.log("No verify channel found");
+  const channel = await client.channels.fetch(VERIFY_CHANNEL_ID);
 
   const msg = await channel.send(
 `Hello! Welcome to Gohith's movie server. To verify yourself, please react with a 👍 emoji to this message.
@@ -33,52 +39,51 @@ If you have Letterboxd and wish to connect your Letterboxd profile to the server
   verifyMessageId = msg.id;
 });
 
-// REACTION HANDLER
+/* ---------------- REACTIONS ---------------- */
 client.on("messageReactionAdd", async (reaction, user) => {
   if (user.bot) return;
+  if (!reaction.message) return;
 
   if (reaction.message.id !== verifyMessageId) return;
 
   const guild = reaction.message.guild;
   const member = await guild.members.fetch(user.id);
 
-  // 👍 VERIFY ROLE
+  // VERIFY ROLE
   if (reaction.emoji.name === "👍") {
-    const role = guild.roles.cache.find(r => r.name === "verified");
-    if (role) member.roles.add(role);
+    const role = guild.roles.cache.find(r => r.name === VERIFIED_ROLE_NAME);
+    if (role) await member.roles.add(role);
   }
 
-  // 🎬 LETTERBOXD FLOW
+  // LETTERBOXD DM TRIGGER
   if (reaction.emoji.name === "🎬") {
-    try {
-      await user.send("Send your Letterboxd profile link:");
-
-    } catch (err) {
-      console.log("Cannot DM user");
-    }
+    await user.send("Send your Letterboxd profile link:");
   }
 });
 
-// DM HANDLER (LETTERBOXD INPUT + EDIT)
+/* ---------------- DM HANDLER ---------------- */
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   if (message.channel.type !== 1) return; // DM only
 
-  if (!message.content.startsWith("http")) return;
+  const content = message.content.trim();
+  if (!content.startsWith("http")) return;
 
   const old = getUser(message.author.id);
 
-  saveUser(message.author.id, message.content);
+  saveUser(message.author.id, content);
 
-  const channel = client.channels.cache.find(c => c.name === "letterboxd");
+  const channel = await client.channels.fetch(LETTERBOXD_CHANNEL_ID);
+
+  if (!channel) return console.log("Letterboxd channel missing");
 
   if (old) {
-    channel.send(`♻️ <@${message.author.id}> updated Letterboxd: ${message.content}`);
+    await channel.send(`♻️ <@${message.author.id}> updated Letterboxd: ${content}`);
   } else {
-    channel.send(`<@${message.author.id}> linked Letterboxd: ${message.content}`);
+    await channel.send(`<@${message.author.id}> linked Letterboxd: ${content}`);
   }
 
-  message.reply("Saved your Letterboxd profile.");
+  await message.reply("Saved your Letterboxd profile.");
 });
 
 client.login(process.env.TOKEN);
