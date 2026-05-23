@@ -10,8 +10,8 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-  	"discord.js": "...",
-  	"sqlite3": "...",
-  	"dotenv": "..."
-	}
+  "discord.js": "...",
+  "sqlite3": "...",
+  "dotenv": "..."
+}
 }
