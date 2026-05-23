@@ -2,14 +2,13 @@
   "name": "camelbot",
   "version": "1.0.0",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.16.0",
-    "dotenv": "^16.4.5",
     "better-sqlite3": "^9.6.0",
+    "dotenv": "^16.4.5",
     "openai": "^4.0.0"
   }
 }
