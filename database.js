@@ -2,7 +2,6 @@ const Database = require("better-sqlite3");
 
 const db = new Database("letterboxd.db");
 
-// users table
 db.prepare(`
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
