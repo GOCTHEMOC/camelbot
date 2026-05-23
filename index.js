@@ -1,176 +1,84 @@
-console.log("OPENAI KEY:", process.env.OPENAI_API_KEY);
-require('dotenv').config();
-
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
-const db = require('./database');
-const { chatAI } = require('./ai');
+require("dotenv").config();
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
+const { saveUser, getUser } = require("./database");
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.GuildMessageReactions
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.DirectMessages
   ],
-  partials: [Partials.Channel, Partials.Message, Partials.Reaction]
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
+// store verification message ID
 let verifyMessageId = null;
 
-/* ================= READY ================= */
-
-client.once('ready', async () => {
+// SEND VERIFY MESSAGE ON START
+client.once("ready", async () => {
   console.log(`Camelbot is online as ${client.user.tag}`);
 
-  const guild = client.guilds.cache.first();
-  if (!guild) return;
+  const channel = client.channels.cache.find(c => c.name === "verify");
 
-  await guild.channels.fetch();
+  if (!channel) return console.log("No verify channel found");
 
-  const channel = guild.channels.cache.find(c => c.name === 'verify');
-  if (!channel) return console.log("Verify channel not found");
+  const msg = await channel.send(
+`Hello! Welcome to Gohith's movie server. To verify yourself, please react with a 👍 emoji to this message.
 
-  const messages = await channel.messages.fetch({ limit: 10 });
-
-  const existing = messages.find(m =>
-    m.author.id === client.user.id &&
-    m.content.includes("Verification System")
+If you have Letterboxd and wish to connect your Letterboxd profile to the server, please react with the 🎬 emoji to this message.`
   );
-
-  let msg;
-
-  if (existing) {
-    msg = existing;
-  } else {
-    msg = await channel.send(
-      `👋 **Verification System**\n\n` +
-      `👍 = Verified Role\n` +
-      `🎬 = Letterboxd Setup`
-    );
-
-    await msg.react('👍');
-    await msg.react('🎬');
-
-    await msg.pin();
-  }
 
   verifyMessageId = msg.id;
 });
 
-/* ================= JOIN DM ================= */
+// REACTION HANDLER
+client.on("messageReactionAdd", async (reaction, user) => {
+  if (user.bot) return;
 
-client.on('guildMemberAdd', async (member) => {
-  try {
-    await member.send(
-      `👋 Welcome!\nGo to #verify to get started.`
-    );
-  } catch (err) {
-    console.log("Could not DM:", member.user.tag);
+  if (reaction.message.id !== verifyMessageId) return;
+
+  const guild = reaction.message.guild;
+  const member = await guild.members.fetch(user.id);
+
+  // 👍 VERIFY ROLE
+  if (reaction.emoji.name === "👍") {
+    const role = guild.roles.cache.find(r => r.name === "wba verified");
+    if (role) member.roles.add(role);
   }
-});
 
-/* ================= REACTIONS ================= */
-
-client.on('messageReactionAdd', async (reaction, user) => {
-  try {
-    if (user.bot) return;
-
-    if (reaction.partial) await reaction.fetch();
-    if (reaction.message.partial) await reaction.message.fetch();
-
-    if (reaction.message.id !== verifyMessageId) return;
-
-    const guild = reaction.message.guild;
-    const member = await guild.members.fetch(user.id);
-
-    const emoji = reaction.emoji.name;
-
-    /* 👍 VERIFIED ROLE */
-    if (emoji === '👍') {
-      const role = guild.roles.cache.find(r => r.name === 'Verified');
-
-      if (role) {
-        await member.roles.add(role);
-        await user.send("✅ You are now Verified.");
-      }
-    }
-
-    /* 🎬 LETTERBOXD FLOW */
-    if (emoji === '🎬') {
-      await user.send(
-        `📩 Send your Letterboxd profile:\nhttps://letterboxd.com/username/`
-      );
-    }
-
-  } catch (err) {
-    console.error("Reaction error:", err);
-  }
-});
-
-/* ================= DM LETTERBOXD ================= */
-
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
-
-  if (!message.guild) {
-    const content = message.content.trim();
-
-    const regex = /^https:\/\/letterboxd\.com\/[A-Za-z0-9_-]+\/$/;
-
-    if (!regex.test(content)) {
-      return message.reply("❌ Invalid format.");
-    }
-
-    const username = content.split('letterboxd.com/')[1].replace('/', '');
-
-    const guild = client.guilds.cache.first();
-    if (!guild) return;
-
+  // 🎬 LETTERBOXD FLOW
+  if (reaction.emoji.name === "🎬") {
     try {
-      const member = await guild.members.fetch(message.author.id);
-
-      db.get(
-        'SELECT * FROM users WHERE discord_id = ?',
-        [message.author.id],
-        (err, row) => {
-          if (row) {
-            return message.reply("❌ Already linked.");
-          }
-
-          db.run(
-            'INSERT INTO users (discord_id, letterboxd_url) VALUES (?, ?)',
-            [message.author.id, content]
-          );
-
-          const role = guild.roles.cache.find(r => r.name === 'Letterboxd');
-          if (role) member.roles.add(role);
-
-          message.reply(`✅ Saved: ${username}`);
-        }
-      );
+      await user.send("Send your Letterboxd profile link:");
 
     } catch (err) {
-      console.error(err);
+      console.log("Cannot DM user");
     }
   }
 });
 
-/* ================= AI CHAT ================= */
-
-client.on('messageCreate', async (message) => {
+// DM HANDLER (LETTERBOXD INPUT + EDIT)
+client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
+  if (message.channel.type !== 1) return; // DM only
 
-  if (!message.mentions.has(client.user)) return;
+  if (!message.content.startsWith("http")) return;
 
-  const prompt = message.content.replace(/<@!?\\d+>/, '').trim();
+  const old = getUser(message.author.id);
 
-  if (!prompt) return message.reply("Ask me something.");
+  saveUser(message.author.id, message.content);
 
-  const response = await chatAI(prompt);
+  const channel = client.channels.cache.find(c => c.name === "letterboxd");
 
-  message.reply(response);
+  if (old) {
+    channel.send(`♻️ <@${message.author.id}> updated Letterboxd: ${message.content}`);
+  } else {
+    channel.send(`<@${message.author.id}> linked Letterboxd: ${message.content}`);
+  }
+
+  message.reply("Saved your Letterboxd profile.");
 });
 
 client.login(process.env.TOKEN);
