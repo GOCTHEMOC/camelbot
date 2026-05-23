@@ -1,3 +1,4 @@
+console.log("OPENAI KEY:", process.env.OPENAI_API_KEY);
 require('dotenv').config();
 
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
