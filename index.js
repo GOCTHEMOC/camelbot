@@ -44,7 +44,7 @@ client.on("messageReactionAdd", async (reaction, user) => {
 
   // 👍 VERIFY ROLE
   if (reaction.emoji.name === "👍") {
-    const role = guild.roles.cache.find(r => r.name === "wba verified");
+    const role = guild.roles.cache.find(r => r.name === "verified");
     if (role) member.roles.add(role);
   }
 
