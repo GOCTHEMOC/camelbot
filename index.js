@@ -1,5 +1,7 @@
 require("dotenv").config();
 
+const pendingLookups = {};
+
 const {
   Client,
   GatewayIntentBits,
@@ -24,7 +26,9 @@ const client = new Client({
 });
 
 client.sessions = new Map();
+client.pendingLookups = pendingLookups;
 
+// attach event handlers
 require("./events/messageCreate")(client);
 require("./events/reactionAdd")(client);
 require("./events/guildMemberAdd")(client);
@@ -38,7 +42,6 @@ client.once("ready", async () => {
   motw.startLoop(client);
 
   const guild = client.guilds.cache.first();
-
   if (!guild) return;
 
   const verifyChannel =
@@ -53,6 +56,7 @@ client.once("ready", async () => {
     m.content.includes("React below")
   );
 
+  // send verification message ONLY once ever per restart cycle
   if (!alreadySent) {
 
     const msg = await verifyChannel.send(
@@ -66,6 +70,7 @@ client.once("ready", async () => {
     await msg.react("🎬");
 
     client.verifyMessageId = msg.id;
+
   } else {
     client.verifyMessageId = alreadySent.id;
   }
