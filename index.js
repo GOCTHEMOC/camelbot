@@ -33,7 +33,9 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// ================= SAFE REPLY =================
+client.entermotwSessions = {};
+
+// ================= SAFE SEND =================
 async function safeSend(channel, content) {
   try {
     return await channel.send(content);
@@ -42,21 +44,18 @@ async function safeSend(channel, content) {
   }
 }
 
-// ================= PST TIME HELPERS =================
-function getPSTNow() {
-  const now = new Date();
-  const pst = new Date(
-    now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" })
-  );
-  return pst;
+// ================= TIME =================
+function getPSTTimestamp() {
+  return new Date().toLocaleString("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
 }
-
-function parsePSTDate(mm, dd, yyyy) {
-  return new Date(Date.UTC(yyyy, mm - 1, dd));
-}
-
-// ================= CLIENT STORAGE =================
-client.entermotwSessions = client.entermotwSessions || {};
 
 // ================= MOTW ENGINE =================
 async function runMOTWCycle() {
@@ -66,14 +65,12 @@ async function runMOTWCycle() {
   try {
     channel = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID);
   } catch (err) {
-    console.log("Channel fetch failed:", err);
+    console.log("MOTW channel fetch failed:", err);
     return;
   }
 
-  const now = getPSTNow();
-  const start = new Date(state.startTimestamp);
-
-  const diffDays = Math.floor((now - start) / 86400000);
+  const now = Date.now();
+  const diffDays = Math.floor((now - state.startTimestamp) / 86400000);
 
   try {
     if (diffDays >= 0 && !state.submissionOpened) {
@@ -84,7 +81,6 @@ async function runMOTWCycle() {
 
     if (diffDays >= 3 && !state.pollPosted) {
       const all = Object.values(state.submissions).flat().slice(0, 5);
-      if (!all.length) return;
 
       state.voteCounts = {};
       state.userVotes = {};
@@ -122,7 +118,7 @@ async function runMOTWCycle() {
 }
 
 // ================= READY =================
-client.once(Events.ClientReady, () => {
+client.once(Events.ClientReady, async () => {
   console.log(`Camelbot online as ${client.user.tag}`);
 });
 
@@ -131,23 +127,21 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return;
 
+    const content = message.content.trim();
     const uid = message.author.id;
 
     const COMMAND_CHANNEL = process.env.COMMAND_CHANNEL_ID;
     const MOVIE_CHANNEL = process.env.MOVIE_CHANNEL_ID;
 
-    const content = message.content.trim();
     const cmd = content.split(" ")[0];
 
-    // ================= CHANNEL RESTRICTIONS (ONLY MOTW) =================
-    const restricted = ["/startmotw", "/entermotw"];
+    // ================= STRICT CHANNEL RULES =================
+    if (cmd === "/startmotw" && message.channel.id !== COMMAND_CHANNEL) {
+      return message.channel.send("Use command channel for /startmotw.");
+    }
 
-    if (
-      restricted.includes(cmd) &&
-      message.channel.id !== COMMAND_CHANNEL &&
-      message.channel.id !== MOVIE_CHANNEL
-    ) {
-      return message.channel.send("Wrong channel.");
+    if (cmd === "/entermotw" && message.channel.id !== MOVIE_CHANNEL) {
+      return message.channel.send("Use movie channel for /entermotw.");
     }
 
     // ================= GLOBAL COMMANDS =================
@@ -160,18 +154,14 @@ client.on(Events.MessageCreate, async (message) => {
       return message.channel.send(
 `Camelbot Commands:
 
-/startmotw MM/DD/YYYY - start MOTW
-/startmotw 0/00/0000 - stop MOTW
-
-/entermotw movie1, movie2 - submit movies (max 2)
-
-/lookup movie - movie info
-
-/ping - test bot`
+/startmotw MM/DD/YYYY
+/entermotw movie1, movie2
+/lookup movie
+/ping`
       );
     }
 
-    // ================= START MOTW (PST SAFE) =================
+    // ================= START MOTW =================
     if (content.startsWith("/startmotw")) {
       const arg = content.split(" ")[1];
 
@@ -188,25 +178,7 @@ client.on(Events.MessageCreate, async (message) => {
         return message.channel.send("Invalid date.");
       }
 
-      const [_, mm, dd, yyyy] = match;
-
-      const start = parsePSTDate(mm, dd, Number(yyyy));
-
-      const now = getPSTNow();
-
-      const isPast =
-        start.getFullYear() < now.getFullYear() ||
-        (start.getFullYear() === now.getFullYear() &&
-          start.getMonth() < now.getMonth()) ||
-        (start.getFullYear() === now.getFullYear() &&
-          start.getMonth() === now.getMonth() &&
-          start.getDate() < now.getDate());
-
-      if (isPast) {
-        state.active = false;
-        saveState();
-        return message.channel.send("Past date rejected (PST).");
-      }
+      const start = new Date(arg);
 
       state.active = true;
       state.startTimestamp = start.getTime();
@@ -220,13 +192,40 @@ client.on(Events.MessageCreate, async (message) => {
 
       saveState();
 
-      return message.channel.send("MOTW started (PST mode).");
+      return message.channel.send("MOTW started.");
     }
 
-    // ================= LOOKUP (GLOBAL) =================
+    // ================= ENTER MOTW =================
+    if (content.startsWith("/entermotw")) {
+
+      console.log("ENTERMOTW HIT");
+
+      if (!state.active || !state.submissionOpened) {
+        return message.channel.send("Submissions closed.");
+      }
+
+      const input = content.replace("/entermotw", "").trim();
+      if (!input) return message.channel.send("Provide movies.");
+
+      const movies = input.split(",").map(x => x.trim()).filter(Boolean);
+
+      if (!state.submissions[uid]) state.submissions[uid] = [];
+
+      if (state.submissions[uid].length >= 2) {
+        return message.channel.send("Max 2 movies.");
+      }
+
+      client.entermotwSessions[uid] = {
+        queue: movies,
+        collected: []
+      };
+
+      return message.channel.send("Processing entry...");
+    }
+
+    // ================= LOOKUP =================
     if (content.startsWith("/lookup")) {
       const query = content.replace("/lookup", "").trim();
-      if (!query) return message.channel.send("Provide movie.");
 
       const res = await axios.get(
         `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&t=${encodeURIComponent(query)}&plot=full`
@@ -240,14 +239,12 @@ client.on(Events.MessageCreate, async (message) => {
 `${res.data.Title} (${res.data.Year})
 Director: ${res.data.Director}
 Cast: ${res.data.Actors}
-IMDB: https://www.imdb.com/title/${res.data.imdbID}/
-Plot: ${res.data.Plot}`
+IMDB: https://www.imdb.com/title/${res.data.imdbID}/`
       );
     }
 
-    // ================= AI CHAT =================
-    if (message.mentions.users.has(client.user.id) || message.channel.type === 1) {
-
+    // ================= AI =================
+    if (message.mentions.users.has(client.user.id)) {
       const prompt = content.replace(`<@${client.user.id}>`, "").trim();
 
       const res = await openai.chat.completions.create({
