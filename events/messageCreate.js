@@ -195,7 +195,7 @@ if (content === "/camelhelp") {
   // =========================
   if (content === "/entermotw") {
 
-    if (message.channel.name !== "movieoftheweek") {
+    if (message.channel.name !== "movie-of-the-week") {
       return message.reply("❌ Only in #movieoftheweek");
     }
 
