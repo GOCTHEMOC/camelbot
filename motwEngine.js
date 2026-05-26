@@ -1,83 +1,128 @@
 const fs = require("fs");
 
-let state = require("./motwState.json");
+const statePath = "./motwState.json";
 
-function saveState() {
-  fs.writeFileSync("./motwState.json", JSON.stringify(state, null, 2));
+function loadState() {
+  return JSON.parse(fs.readFileSync(statePath, "utf8"));
 }
 
-// ================= CONFIG =================
-const SUBMISSION_DURATION = 4 * 24 * 60 * 60 * 1000; // 4 days
-const VOTING_DURATION = 3 * 24 * 60 * 60 * 1000;      // 3 days
+function saveState(state) {
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+}
 
-// ================= START WEEK =================
+let state = loadState();
+
+const DAY = 24 * 60 * 60 * 1000;
+
+const SUBMISSION = 4 * DAY;
+const POLLING = 2 * DAY;
+const REST = 1 * DAY;
+
 function startSubmission(client) {
-  state.phase = "submission";
+
   state.active = true;
+  state.phase = "submission";
+  state.phaseEndsAt = Date.now() + SUBMISSION;
   state.weekIndex += 1;
   state.submissions = {};
   state.votes = {};
-  state.phaseEndsAt = Date.now() + SUBMISSION_DURATION;
 
-  saveState();
+  saveState(state);
 
-  const channel = client.channels.cache.find(c => c.name === "movie");
-  if (channel) channel.send(`🎬 MOTW Week ${state.weekIndex} has started! Submissions are open.`);
-}
+  const guild = client.guilds.cache.first();
 
-// ================= START VOTING =================
-function startVoting(client) {
-  state.phase = "voting";
-  state.phaseEndsAt = Date.now() + VOTING_DURATION;
-
-  saveState();
-
-  const channel = client.channels.cache.find(c => c.name === "movie");
-  if (channel) channel.send(`🗳 Voting is now open for MOTW Week ${state.weekIndex}!`);
-}
-
-// ================= END WEEK =================
-function resetWeek(client) {
-  const channel = client.channels.cache.find(c => c.name === "movie");
+  const channel =
+    guild.channels.cache.find(c => c.name === "movieoftheweek");
 
   if (channel) {
-    channel.send(`🏆 MOTW Week ${state.weekIndex} has ended!`);
+    channel.send(`🎬 MOTW Week ${state.weekIndex} submissions are OPEN.`);
   }
-
-  state.phase = "inactive";
-  state.active = false;
-  state.phaseEndsAt = null;
-
-  saveState();
 }
 
-// ================= LOOP ENGINE =================
-function startMOTWLoop(client) {
+function startPolling(client) {
+
+  state.phase = "polling";
+  state.phaseEndsAt = Date.now() + POLLING;
+
+  saveState(state);
+
+  const guild = client.guilds.cache.first();
+
+  const channel =
+    guild.channels.cache.find(c => c.name === "movieoftheweek");
+
+  if (channel) {
+    channel.send(`🗳 Voting has started.`);
+  }
+}
+
+function startRest(client) {
+
+  state.phase = "rest";
+  state.phaseEndsAt = Date.now() + REST;
+
+  saveState(state);
+
+  const guild = client.guilds.cache.first();
+
+  const channel =
+    guild.channels.cache.find(c => c.name === "movieoftheweek");
+
+  if (channel) {
+    channel.send(`😴 Rest day.`);
+  }
+}
+
+function resetWeek() {
+
+  state.submissions = {};
+  state.votes = {};
+
+  saveState(state);
+}
+
+function stopMOTW() {
+
+  state.active = false;
+  state.phase = "inactive";
+
+  saveState(state);
+}
+
+function startLoop(client) {
+
   setInterval(() => {
+
+    state = loadState();
+
     if (!state.active) return;
 
     const now = Date.now();
 
-    // submission → voting
-    if (state.phase === "submission" && now > state.phaseEndsAt) {
-      startVoting(client);
+    if (now < state.phaseEndsAt) return;
+
+    if (state.phase === "submission") {
+      startPolling(client);
     }
 
-    // voting → reset
-    else if (state.phase === "voting" && now > state.phaseEndsAt) {
-      resetWeek(client);
+    else if (state.phase === "polling") {
+      startRest(client);
     }
 
-  }, 60 * 1000); // check every minute
-}
+    else if (state.phase === "rest") {
+      resetWeek();
+      startSubmission(client);
+    }
 
-// ================= MANUAL START =================
-function manualStart(client) {
-  startSubmission(client);
+  }, 60000);
+
 }
 
 module.exports = {
-  startMOTWLoop,
-  manualStart,
-  state
+  state,
+  saveState,
+  loadState,
+  startSubmission,
+  stopMOTW,
+  startLoop
 };
