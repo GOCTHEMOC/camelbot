@@ -1,7 +1,18 @@
 module.exports = (client) => {
-  client.on("guildMemberAdd", async (member) => {
+
+  client.on("guildMemberAdd",
+  async (member) => {
+
     try {
-      await member.send("👋 Go to #verify and react 👍 to get started.");
+
+      await member.send(
+`Welcome to the server.
+
+Go to #verify and react there.`
+      );
+
     } catch {}
+
   });
+
 };
