@@ -9,7 +9,7 @@ module.exports = (client) => {
       if (reaction.partial) await reaction.fetch();
       if (reaction.message.partial) await reaction.message.fetch();
 
-      // 🔴 FIX: must match BOTH channel + message
+      // MUST MATCH verify message
       if (!client.verifyMessageId) return;
       if (reaction.message.id !== client.verifyMessageId) return;
 
@@ -22,14 +22,14 @@ module.exports = (client) => {
         if (role) await member.roles.add(role);
 
         try {
-          await user.send("📩 Now send your Letterboxd link:");
+          await user.send("📩 Send your Letterboxd link:");
         } catch {}
       }
 
       // ================= 🎬 PROMPT =================
       if (reaction.emoji.name === "🎬") {
         try {
-          await user.send("Send your Letterboxd profile link:");
+          await user.send("Send your Letterboxd profile URL:");
         } catch {}
       }
 
@@ -38,7 +38,7 @@ module.exports = (client) => {
     }
   });
 
-  // ================= DM HANDLER (FIXED + COMPLETE) =================
+  // ================= DM HANDLER =================
   client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
     if (message.guild) return;
@@ -46,6 +46,7 @@ module.exports = (client) => {
     const url = message.content.trim();
 
     const regex = /^https:\/\/letterboxd\.com\/[A-Za-z0-9_-]+\/$/;
+
     if (!regex.test(url)) {
       return message.reply("❌ Invalid format. Use https://letterboxd.com/username/");
     }
@@ -55,14 +56,17 @@ module.exports = (client) => {
     ).get(url);
 
     if (exists) {
-      return message.reply("❌ This account is already linked.");
+      return message.reply("❌ Already linked.");
     }
 
     db.prepare(
       "INSERT INTO users (discord_id, letterboxd) VALUES (?, ?)"
     ).run(message.author.id, url);
 
-    const guild = client.guilds.cache.first();
+    const guild = client.guilds.cache.find(g =>
+      g.members.cache.has(message.author.id)
+    );
+
     if (!guild) return;
 
     const member = await guild.members.fetch(message.author.id);
@@ -70,7 +74,7 @@ module.exports = (client) => {
     const role = guild.roles.cache.find(r => r.name === "Letterboxd");
     if (role) await member.roles.add(role);
 
-    return message.reply("✅ Letterboxd verified successfully!");
+    return message.reply("✅ Letterboxd verified!");
   });
 
 };
