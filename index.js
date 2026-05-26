@@ -47,24 +47,19 @@ async function runMOTWCycle() {
   const diffDays = Math.floor((now - state.startTimestamp) / (1000 * 60 * 60 * 24));
 
   try {
-
     if (diffDays >= 0 && !state.submissionOpened) {
       state.submissionOpened = true;
-
-      await channel.send(
-        `<@&${process.env.MOTW_ROLE_ID}> Submissions OPEN. Use /entermotw`
-      );
-
+      await channel.send(`<@&${process.env.MOTW_ROLE_ID}> Submissions OPEN. Use /entermotw`);
       saveState();
     }
 
     if (diffDays >= 3 && !state.pollPosted) {
-
       const all = Object.values(state.submissions).flat().slice(0, 5);
       if (!all.length) return;
 
       const rows = [];
       state.voteCounts = {};
+      state.userVotes = state.userVotes || {};
 
       all.forEach((movie, index) => {
         state.voteCounts[movie] = 0;
@@ -86,12 +81,10 @@ async function runMOTWCycle() {
 
       state.pollMessageId = msg.id;
       state.pollPosted = true;
-
       saveState();
     }
 
     if (diffDays >= 5 && !state.winnerPosted) {
-
       const winner = Object.entries(state.voteCounts || {})
         .sort((a, b) => b[1] - a[1])[0];
 
@@ -110,14 +103,13 @@ async function runMOTWCycle() {
       state.voteCounts = {};
       state.userVotes = {};
       state.pollMessageId = null;
-
       saveState();
     }
 
   } catch (err) {
     console.log(err);
   }
-}
+};
 
 // ================= READY =================
 client.once(Events.ClientReady, async () => {
@@ -125,7 +117,7 @@ client.once(Events.ClientReady, async () => {
   await runMOTWCycle();
 });
 
-// ================= BUTTON VOTING =================
+// ================= VOTING =================
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
 
@@ -158,6 +150,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
   return interaction.reply({ content: "Vote recorded.", ephemeral: true });
 });
 
+// ================= ENTEMOTW SESSION STATE =================
+client.entermotwSessions = {};
+
 // ================= MESSAGE HANDLER =================
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
@@ -170,13 +165,14 @@ client.on(Events.MessageCreate, async (message) => {
     const COMMAND_CHANNEL = process.env.COMMAND_CHANNEL_ID;
     const MOVIE_CHANNEL = process.env.MOVIE_CHANNEL_ID;
 
-    // ================= CHANNEL LOCK FOR MOTW COMMANDS =================
     const isMOTWCommand =
       message.content.startsWith("/startmotw") ||
       message.content.startsWith("/entermotw");
 
-    if (isMOTWCommand && message.channel.id !== COMMAND_CHANNEL && message.channel.id !== MOVIE_CHANNEL) {
-      return message.reply("Use MOTW commands in the correct channel.");
+    if (isMOTWCommand &&
+        message.channel.id !== COMMAND_CHANNEL &&
+        message.channel.id !== MOVIE_CHANNEL) {
+      return message.reply("Use MOTW commands in correct channel.");
     }
 
     // ================= START MOTW =================
@@ -186,7 +182,7 @@ client.on(Events.MessageCreate, async (message) => {
       if (arg === "0/00/0000") {
         state.active = false;
         saveState();
-        return message.reply("Stopped.");
+        return message.reply("MOTW stopped.");
       }
 
       const match = arg.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
@@ -194,66 +190,133 @@ client.on(Events.MessageCreate, async (message) => {
 
       const [_, mm, dd, yyyy] = match;
 
+      const startDate = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
+
+      if (startDate.getTime() < Date.now()) {
+        state.active = false;
+        saveState();
+        return message.reply("Past date detected. MOTW stopped.");
+      }
+
       state.active = true;
-      state.startTimestamp = new Date(`${yyyy}-${mm}-${dd}T00:00:00`).getTime();
+      state.startTimestamp = startDate.getTime();
+
+      state.submissionOpened = false;
+      state.pollPosted = false;
+      state.winnerPosted = false;
+      state.submissions = {};
+      state.voteCounts = {};
+      state.userVotes = {};
 
       saveState();
-      await runMOTWCycle();
 
+      await runMOTWCycle();
       return message.reply("MOTW started.");
     }
 
-    // ================= FIXED /entermotw =================
+    // ================= ENTEMOTW STATE MACHINE =================
     if (message.content.startsWith("/entermotw")) {
 
-      // MUST ONLY WORK IN MOVIE CHANNEL
       if (message.channel.id !== process.env.MOVIE_CHANNEL_ID) {
-        return message.reply("This command can only be used in the movie channel.");
+        return message.reply("Use movie channel only.");
+      }
+
+      if (!state.active || !state.submissionOpened) {
+        return message.reply("Submissions are closed.");
       }
 
       const input = message.content.replace("/entermotw", "").trim();
-      if (!input) return message.reply("Provide at least one movie.");
+      if (!input) return message.reply("Provide movie(s).");
 
-      const queries = input.split(",").map(m => m.trim()).filter(Boolean);
+      const queries = input.split(",").map(x => x.trim()).filter(Boolean);
 
       const uid = message.author.id;
+
       if (!state.submissions[uid]) state.submissions[uid] = [];
 
-      for (const query of queries) {
-
-        const search = await axios.get(
-          `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${encodeURIComponent(query)}`
-        );
-
-        const results = (search.data.Search || []).slice(0, 6);
-
-        if (!results.length) {
-          await message.reply(`No results for: ${query}`);
-          continue;
-        }
-
-        const best = results[0];
-
-        const full = await axios.get(
-          `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${best.imdbID}&plot=full`
-        );
-
-        const movie = full.data;
-
-        if (!movie?.Title) {
-          await message.reply(`Failed: ${query}`);
-          continue;
-        }
-
-        if (state.submissions[uid].length >= 2) {
-          return message.reply("Max 2 movies per user.");
-        }
-
-        state.submissions[uid].push(movie.Title);
+      if (state.submissions[uid].length >= 2) {
+        return message.reply("Max 2 movies already submitted.");
       }
 
-      saveState();
-      return message.reply("Saved.");
+      client.entermotwSessions[uid] = {
+        queue: queries,
+        collected: []
+      };
+
+      return processNextMovie(message);
+    }
+
+    // ================= MOVIE PROCESSOR =================
+    async function processNextMovie(message) {
+      const uid = message.author.id;
+      const session = client.entermotwSessions[uid];
+
+      if (!session) return;
+
+      if (session.queue.length === 0) {
+        state.submissions[uid].push(...session.collected);
+        saveState();
+
+        delete client.entermotwSessions[uid];
+
+        return message.reply(
+          `Thank you ${message.author.username}, you have successfully entered ${session.collected.length} movie(s) into the poll: ${session.collected.join(", ")}`
+        );
+      }
+
+      const query = session.queue.shift();
+
+      const search = await axios.get(
+        `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${encodeURIComponent(query)}`
+      );
+
+      const results = (search.data.Search || []).slice(0, 6);
+
+      if (!results.length) {
+        return processNextMovie(message);
+      }
+
+      session.current = results;
+
+      let text = `Select movie for: ${query}\n\n`;
+      results.forEach((m, i) => {
+        text += `${i + 1}. ${m.Title} (${m.Year})\n`;
+      });
+      text += `\nReply 1-6 or 0 to skip`;
+
+      session.awaiting = true;
+
+      await message.reply(text);
+    }
+
+    // ================= SELECTION HANDLER =================
+    const uid = message.author.id;
+    const session = client.entermotwSessions[uid];
+
+    if (session?.awaiting) {
+
+      const val = message.content.trim();
+
+      if (val === "0") {
+        session.awaiting = false;
+        return processNextMovie(message);
+      }
+
+      const index = parseInt(val) - 1;
+      const selected = session.current?.[index];
+
+      if (!selected) {
+        return message.reply("Invalid selection.");
+      }
+
+      const full = await axios.get(
+        `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${selected.imdbID}&plot=full`
+      );
+
+      session.collected.push(full.data.Title);
+      session.awaiting = false;
+
+      return processNextMovie(message);
     }
 
     // ================= AI CHAT =================
