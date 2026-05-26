@@ -8,17 +8,4 @@ CREATE TABLE IF NOT EXISTS users (
 )
 `).run();
 
-function saveUser(id, link) {
-  db.prepare(`
-    INSERT OR REPLACE INTO users (discord_id, letterboxd)
-    VALUES (?, ?)
-  `).run(id, link);
-}
-
-function getUser(id) {
-  return db.prepare(`
-    SELECT * FROM users WHERE discord_id = ?
-  `).get(id);
-}
-
-module.exports = { saveUser, getUser };
+module.exports = db;
