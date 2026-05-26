@@ -27,7 +27,7 @@ function saveState() {
   fs.writeFileSync("./motwState.json", JSON.stringify(state, null, 2));
 }
 
-// ================= FSM DEFINITIONS =================
+// ================= MOTW FSM =================
 const MOTW_STATE = {
   SEARCH_1: "SEARCH_1",
   PICK_1: "PICK_1",
@@ -48,7 +48,7 @@ const client = new Client({
 
 client.sessions = new Map();
 
-// auto-clean sessions (prevents memory leaks)
+// cleanup stale sessions (10 min)
 setInterval(() => {
   const now = Date.now();
   for (const [id, s] of client.sessions.entries()) {
@@ -94,7 +94,7 @@ client.once(Events.ClientReady, async () => {
   } catch {}
 });
 
-// ================= MAIN HANDLER =================
+// ================= MESSAGE HANDLER =================
 client.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return;
@@ -104,12 +104,12 @@ client.on(Events.MessageCreate, async (message) => {
     const session = client.sessions.get(uid);
 
     // =====================================================
-    // NO SESSION → COMMANDS ONLY
+    // NO SESSION COMMANDS
     // =====================================================
     if (!session) {
 
       if (content === "/camelhelp") {
-        return message.reply("/lookup, /entermotw, /startmotw, /stopmotw");
+        return message.reply("/lookup, /entermotw, /startmotw, /stopmotw, /viewmotw");
       }
 
       if (content === "/startmotw") {
@@ -128,7 +128,41 @@ client.on(Events.MessageCreate, async (message) => {
         return message.reply("MOTW stopped.");
       }
 
-      // lookup start
+      // ================= VIEW MOTW =================
+      if (content === "/viewmotw") {
+
+        const subs = state.submissions;
+
+        if (!subs || Object.keys(subs).length === 0) {
+          return message.reply("No MOTW submissions yet.");
+        }
+
+        let output = "🏆 MOTW Submissions:\n\n";
+
+        for (const [userId, movies] of Object.entries(subs)) {
+
+          output += `<@${userId}>:\n`;
+
+          if (!Array.isArray(movies) || movies.length === 0) {
+            output += `No movies submitted\n\n`;
+            continue;
+          }
+
+          if (movies[0]) {
+            output += `1. ${movies[0].title} https://www.imdb.com/title/${movies[0].imdb}/\n`;
+          }
+
+          if (movies[1]) {
+            output += `2. ${movies[1].title} https://www.imdb.com/title/${movies[1].imdb}/\n`;
+          }
+
+          output += "\n";
+        }
+
+        return message.reply(output);
+      }
+
+      // ================= LOOKUP START =================
       if (content.startsWith("/lookup")) {
         const query = content.replace("/lookup", "").trim();
         if (!query) return message.reply("Provide a movie name.");
@@ -150,8 +184,9 @@ client.on(Events.MessageCreate, async (message) => {
         return message.reply(msg);
       }
 
-      // motw start
+      // ================= ENTER MOTW =================
       if (content === "/entermotw") {
+
         if (!state.active) return message.reply("No active MOTW.");
         if (!state.submissionOpened) return message.reply("Closed.");
 
@@ -173,6 +208,7 @@ client.on(Events.MessageCreate, async (message) => {
     // LOOKUP FLOW
     // =====================================================
     if (session.type === "lookup") {
+
       const choice = parseInt(content);
 
       if (isNaN(choice) || choice < 0 || choice > session.results.length) {
@@ -200,7 +236,7 @@ IMDB: https://www.imdb.com/title/${details.imdbID}/`
     }
 
     // =====================================================
-    // MOTW FLOW (FULL FSM)
+    // MOTW FLOW (FSM)
     // =====================================================
     if (session.type === "motw") {
 
@@ -208,6 +244,7 @@ IMDB: https://www.imdb.com/title/${details.imdbID}/`
 
       // ---------------- SEARCH 1 ----------------
       if (session.state === MOTW_STATE.SEARCH_1) {
+
         const results = await searchMovies(content);
         if (!results.length) return message.reply("No results. Try again:");
 
@@ -243,6 +280,7 @@ IMDB: https://www.imdb.com/title/${details.imdbID}/`
 
       // ---------------- SEARCH 2 ----------------
       if (session.state === MOTW_STATE.SEARCH_2) {
+
         const results = await searchMovies(content);
         if (!results.length) return message.reply("No results. Try again:");
 
