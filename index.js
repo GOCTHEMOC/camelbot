@@ -9,8 +9,14 @@ const {
 
 const axios = require("axios");
 const fs = require("fs");
+const OpenAI = require("openai");
 
 const { saveUser, getUser } = require("./database");
+
+// ================= OPENAI =================
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 // ================= STATE =================
 const state = require("./motwState.json");
@@ -37,30 +43,26 @@ async function runMOTWCycle() {
 
   const channel = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID);
 
-  const now = new Date();
-  const start = new Date(state.startTimestamp);
-
-  const diffDays = Math.floor((now - start) / (1000 * 60 * 60 * 24));
-  const cycleDay = diffDays % 7;
+  const now = Date.now();
+  const diffDays = Math.floor((now - state.startTimestamp) / (1000 * 60 * 60 * 24));
 
   try {
 
-    // DAY 0 - SUBMISSIONS OPEN
-    if (cycleDay === 0 && !state.submissionOpened) {
-      state.submissions = {};
+    // DAY 0 - START
+    if (diffDays >= 0 && !state.submissionOpened) {
+      state.submissionOpened = true;
       state.pollPosted = false;
       state.winnerPosted = false;
-      state.submissionOpened = true;
 
       await channel.send(
-        `<@&${process.env.MOTW_ROLE_ID}> 🎬 Submissions OPEN (/entermotw)`
+        `<@&${process.env.MOTW_ROLE_ID}> 🎬 Submissions OPEN! Use /entermotw`
       );
 
       saveState();
     }
 
     // DAY 3 - POLL
-    if (cycleDay === 3 && !state.pollPosted) {
+    if (diffDays >= 3 && !state.pollPosted) {
       const all = Object.values(state.submissions).flat();
 
       if (!all.length) return;
@@ -76,8 +78,8 @@ all.map((m, i) => `${i + 1}️⃣ ${m}`).join("\n")
       saveState();
     }
 
-    // DAY 4 - WINNER
-    if (cycleDay === 4 && state.pollPosted && !state.winnerPosted) {
+    // DAY 5 - WINNER
+    if (diffDays >= 5 && !state.winnerPosted) {
       const poll = await channel.messages.fetch(state.pollMessageId);
 
       let top = null;
@@ -96,8 +98,10 @@ all.map((m, i) => `${i + 1}️⃣ ${m}`).join("\n")
       saveState();
     }
 
-    // RESET
-    if (cycleDay === 6) {
+    // RESET AFTER 7 DAYS
+    if (diffDays >= 7) {
+      state.startTimestamp = Date.now();
+
       state.submissionOpened = false;
       state.pollPosted = false;
       state.winnerPosted = false;
@@ -129,62 +133,65 @@ React 🎬 to link Letterboxd.`
 
   verifyMessageId = msg.id;
 
-  // 🔥 RUN IMMEDIATELY ON START
   await runMOTWCycle();
 });
 
-// ================= REACTIONS =================
-client.on("messageReactionAdd", async (reaction, user) => {
-  if (user.bot) return;
-
-  if (reaction.message.id !== verifyMessageId) return;
-
-  const guild = reaction.message.guild;
-  const member = await guild.members.fetch(user.id);
-
-  if (reaction.emoji.name === "👍") {
-    const role = guild.roles.cache.find(r => r.name === "verified");
-    if (role) await member.roles.add(role);
-  }
-
-  if (reaction.emoji.name === "🎬") {
-    user.send("Send your Letterboxd link:");
-  }
-});
-
-// ================= MESSAGE HANDLER =================
+// ================= AI CHAT =================
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
 
-  // 🔒 COMMAND LOCK
-  const allowedChannel = process.env.COMMAND_CHANNEL_ID;
+  const isDM = message.channel.type === 1;
+  const isMention = message.mentions.users.has(client.user.id);
 
-  if (
-    message.guild &&
-    message.content.startsWith("/") &&
-    message.channel.id !== allowedChannel
-  ) return;
+  if (isDM || isMention) {
+    try {
+      const prompt = isMention
+        ? message.content.replace(`<@${client.user.id}>`, "").trim()
+        : message.content;
 
-  if (!message.guild) return;
+      if (!prompt) return;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: "You are Camelbot, a helpful assistant in a movie Discord server."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ]
+      });
+
+      await message.reply(response.choices[0].message.content);
+      return;
+    } catch (err) {
+      console.log("AI error:", err);
+      await message.reply("AI error.");
+      return;
+    }
+  }
+
+  // ================= COMMAND CHANNEL LOCK =================
+  const allowed = process.env.COMMAND_CHANNEL_ID;
+  if (message.guild && message.content.startsWith("/") && message.channel.id !== allowed) return;
 
   try {
 
-    // ================= LETTERBOXD DM =================
-    if (message.channel.type === 1) {
-      const link = message.content.trim();
+    // ================= HELP =================
+    if (message.content.startsWith("/camelhelp")) {
+      return message.reply(
+`📌 Commands:
 
-      const old = getUser(message.author.id);
-      saveUser(message.author.id, link);
+/startmotw MM/DD/YYYY
+/entermotw "movie1, movie2"
+/lookup <movie>
+/camelhelp
 
-      const channel = await client.channels.fetch(process.env.LETTERBOXD_CHANNEL_ID);
-
-      if (old?.letterboxd) {
-        await channel.send(`♻️ <@${message.author.id}> updated: ${link}`);
-      } else {
-        await channel.send(`<@${message.author.id}> linked: ${link}`);
-      }
-
-      return message.reply("Saved Letterboxd.");
+DM or mention bot → AI chat`
+      );
     }
 
     // ================= START MOTW =================
@@ -198,18 +205,10 @@ client.on(Events.MessageCreate, async (message) => {
       }
 
       const match = arg.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-
-      if (!match) {
-        return message.reply("❌ Use MM/DD/YYYY");
-      }
+      if (!match) return message.reply("Use MM/DD/YYYY");
 
       const [_, mm, dd, yyyy] = match;
-
       const date = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
-
-      if (isNaN(date.getTime())) {
-        return message.reply("❌ Invalid date.");
-      }
 
       state.active = true;
       state.startTimestamp = date.getTime();
@@ -218,30 +217,24 @@ client.on(Events.MessageCreate, async (message) => {
 
       await runMOTWCycle();
 
-      return message.reply(`🎬 MOTW started: ${arg}`);
+      return message.reply("🎬 MOTW started.");
     }
 
     // ================= ENTER MOTW =================
     if (message.content.startsWith("/entermotw")) {
-      if (!state.active) return message.reply("MOTW not active.");
-
-      const input = message.content.replace("/entermotw", "").trim();
+      const input = message.content.replace("/entermotw", "").replace(/"/g, "");
       const movies = input.split(",").map(m => m.trim());
 
-      if (movies.length > 2) return message.reply("Max 2 movies.");
-
       const uid = message.author.id;
-
       if (!state.submissions[uid]) state.submissions[uid] = [];
 
-      if (state.submissions[uid].length + movies.length > 2) {
-        return message.reply("Max 2 per user.");
-      }
+      if (state.submissions[uid].length + movies.length > 2)
+        return message.reply("Max 2 movies.");
 
       state.submissions[uid].push(...movies);
       saveState();
 
-      return message.reply("Movies submitted.");
+      return message.reply("Saved.");
     }
 
     // ================= LOOKUP =================
@@ -256,20 +249,17 @@ client.on(Events.MessageCreate, async (message) => {
 
       if (!movies.length) return message.reply("No results.");
 
-      let text = "Are you looking for:\n\n";
+      let text = "Results:\n\n";
       movies.forEach((m, i) => {
         text += `${i + 1}. ${m.Title} (${m.Year})\n`;
       });
 
-      text += "\nReply 1–6 or 0.";
-
       message.reply(text);
-
       client.temp = client.temp || {};
       client.temp[message.author.id] = movies;
     }
 
-    // ================= SELECT =================
+    // ================= SELECT LOOKUP =================
     const temp = client.temp?.[message.author.id];
 
     if (temp && /^\d+$/.test(message.content)) {
@@ -289,19 +279,25 @@ client.on(Events.MessageCreate, async (message) => {
 
       delete client.temp[message.author.id];
 
-      return message.reply(
-`🎬 ${full.data.Title} (${full.data.Year})
-
-⭐ ${full.data.imdbRating}
-🎭 ${full.data.Genre}
-🎬 ${full.data.Director}
-
-📝 ${full.data.Plot}`
-      );
+      return message.reply(`${full.data.Title}\n${full.data.Plot}`);
     }
 
   } catch (err) {
-    console.log("Handler error:", err);
+    console.log(err);
+  }
+
+  // ================= LETTERBOXD DM =================
+  if (message.channel.type === 1) {
+    const link = message.content.trim();
+
+    const old = getUser(message.author.id);
+    saveUser(message.author.id, link);
+
+    const ch = await client.channels.fetch(process.env.LETTERBOXD_CHANNEL_ID);
+
+    await ch.send(`<@${message.author.id}> ${old ? "updated" : "linked"}: ${link}`);
+
+    return message.reply("Saved.");
   }
 });
 
