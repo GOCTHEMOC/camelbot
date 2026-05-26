@@ -1,66 +1,67 @@
-const { handleLetterboxdDM } =
-require("../services/letterboxd");
-
 module.exports = (client) => {
 
-  client.on("messageReactionAdd",
-  async (reaction, user) => {
+client.on("messageReactionAdd", async (reaction, user) => {
 
-    if (user.bot) return;
+  if (user.bot) return;
+
+  // ✅ FIX PARTIALS
+  if (reaction.partial) {
+    try {
+      await reaction.fetch();
+    } catch {
+      return;
+    }
+  }
+
+  const message = reaction.message;
+
+  // ✅ ONLY VERIFY MESSAGE
+  if (message.id !== client.verifyMessageId) return;
+
+  const guild = message.guild;
+
+  if (!guild) return;
+
+  const member = await guild.members.fetch(user.id)
+    .catch(() => null);
+
+  if (!member) return;
+
+  // =========================
+  // 👍 VERIFIED ROLE
+  // =========================
+  if (reaction.emoji.name === "👍") {
+
+    const verifiedRole = guild.roles.cache.get(
+      process.env.VERIFIED_ROLE_ID
+    );
+
+    if (!verifiedRole) return;
+
+    await member.roles.add(verifiedRole)
+      .catch(console.error);
+
+    return;
+  }
+
+  // =========================
+  // 🎬 LETTERBOXD FLOW
+  // =========================
+  if (reaction.emoji.name === "🎬") {
 
     try {
 
-      if (reaction.partial) await reaction.fetch();
+      await user.send(
+`🎬 Send your Letterboxd profile link.
 
-      if (reaction.message.partial)
-        await reaction.message.fetch();
-
-      if (
-        reaction.message.id !==
-        client.verifyMessageId
-      ) return;
-
-      const guild = reaction.message.guild;
-
-      const member =
-        await guild.members.fetch(user.id);
-
-      if (reaction.emoji.name === "👍") {
-
-        const role =
-          guild.roles.cache.find(
-            r => r.name === "Verified"
-          );
-
-        if (role) {
-          await member.roles.add(role);
-        }
-      }
-
-      if (reaction.emoji.name === "🎬") {
-
-        await user.send(
-`Send your Letterboxd link:
-
+Format:
 https://letterboxd.com/username/`
-        );
-      }
+      );
 
     } catch (err) {
-      console.log(err);
+      console.error(err);
     }
+  }
 
-  });
-
-  client.on("messageCreate",
-  async (message) => {
-
-    if (message.author.bot) return;
-
-    if (message.guild) return;
-
-    await handleLetterboxdDM(client, message);
-
-  });
-
+});
 };
