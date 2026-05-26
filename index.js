@@ -48,7 +48,6 @@ async function runMOTWCycle() {
 
   try {
 
-    // OPEN SUBMISSIONS
     if (diffDays >= 0 && !state.submissionOpened) {
       state.submissionOpened = true;
 
@@ -59,7 +58,6 @@ async function runMOTWCycle() {
       saveState();
     }
 
-    // POLL
     if (diffDays >= 3 && !state.pollPosted) {
 
       const all = Object.values(state.submissions).flat().slice(0, 5);
@@ -92,7 +90,6 @@ async function runMOTWCycle() {
       saveState();
     }
 
-    // WINNER
     if (diffDays >= 5 && !state.winnerPosted) {
 
       const winner = Object.entries(state.voteCounts || {})
@@ -104,7 +101,6 @@ async function runMOTWCycle() {
       saveState();
     }
 
-    // RESET
     if (diffDays >= 7) {
       state.startTimestamp = Date.now();
       state.submissionOpened = false;
@@ -129,7 +125,7 @@ client.once(Events.ClientReady, async () => {
   await runMOTWCycle();
 });
 
-// ================= INTERACTIONS =================
+// ================= BUTTON VOTING =================
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
 
@@ -174,14 +170,13 @@ client.on(Events.MessageCreate, async (message) => {
     const COMMAND_CHANNEL = process.env.COMMAND_CHANNEL_ID;
     const MOVIE_CHANNEL = process.env.MOVIE_CHANNEL_ID;
 
+    // ================= CHANNEL LOCK FOR MOTW COMMANDS =================
     const isMOTWCommand =
       message.content.startsWith("/startmotw") ||
       message.content.startsWith("/entermotw");
 
-    // ================= FIXED CHANNEL LOGIC =================
-
-    if (isMOTWCommand && message.channel.id !== COMMAND_CHANNEL) {
-      return message.reply("Use MOTW commands in the command channel only.");
+    if (isMOTWCommand && message.channel.id !== COMMAND_CHANNEL && message.channel.id !== MOVIE_CHANNEL) {
+      return message.reply("Use MOTW commands in the correct channel.");
     }
 
     // ================= START MOTW =================
@@ -208,23 +203,56 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply("MOTW started.");
     }
 
-    // ================= ENTER MOTW =================
+    // ================= FIXED /entermotw =================
     if (message.content.startsWith("/entermotw")) {
 
-      const input = message.content.replace("/entermotw", "").trim();
-      const movies = input.split(",").map(m => m.trim());
-
-      const uid = message.author.id;
-
-      if (!state.submissions[uid]) state.submissions[uid] = [];
-
-      if (state.submissions[uid].length + movies.length > 2) {
-        return message.reply("Max 2 movies.");
+      // MUST ONLY WORK IN MOVIE CHANNEL
+      if (message.channel.id !== process.env.MOVIE_CHANNEL_ID) {
+        return message.reply("This command can only be used in the movie channel.");
       }
 
-      state.submissions[uid].push(...movies);
-      saveState();
+      const input = message.content.replace("/entermotw", "").trim();
+      if (!input) return message.reply("Provide at least one movie.");
 
+      const queries = input.split(",").map(m => m.trim()).filter(Boolean);
+
+      const uid = message.author.id;
+      if (!state.submissions[uid]) state.submissions[uid] = [];
+
+      for (const query of queries) {
+
+        const search = await axios.get(
+          `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${encodeURIComponent(query)}`
+        );
+
+        const results = (search.data.Search || []).slice(0, 6);
+
+        if (!results.length) {
+          await message.reply(`No results for: ${query}`);
+          continue;
+        }
+
+        const best = results[0];
+
+        const full = await axios.get(
+          `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${best.imdbID}&plot=full`
+        );
+
+        const movie = full.data;
+
+        if (!movie?.Title) {
+          await message.reply(`Failed: ${query}`);
+          continue;
+        }
+
+        if (state.submissions[uid].length >= 2) {
+          return message.reply("Max 2 movies per user.");
+        }
+
+        state.submissions[uid].push(movie.Title);
+      }
+
+      saveState();
       return message.reply("Saved.");
     }
 
