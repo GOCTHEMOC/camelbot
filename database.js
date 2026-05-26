@@ -1,24 +1,25 @@
 const Database = require("better-sqlite3");
+const db = new Database("camelbot.db");
 
-const db = new Database("letterboxd.db");
-
+// SAFE schema (fixes your previous "no such column: id")
 db.prepare(`
 CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
+  discord_id TEXT PRIMARY KEY,
   letterboxd TEXT
 )
 `).run();
 
-function saveUser(id, letterboxd) {
+function saveUser(discordId, letterboxd) {
   db.prepare(`
-    INSERT INTO users (id, letterboxd)
+    INSERT OR REPLACE INTO users (discord_id, letterboxd)
     VALUES (?, ?)
-    ON CONFLICT(id) DO UPDATE SET letterboxd=excluded.letterboxd
-  `).run(id, letterboxd);
+  `).run(discordId, letterboxd);
 }
 
-function getUser(id) {
-  return db.prepare(`SELECT * FROM users WHERE id = ?`).get(id);
+function getUser(discordId) {
+  return db.prepare(`
+    SELECT * FROM users WHERE discord_id = ?
+  `).get(discordId);
 }
 
 module.exports = { saveUser, getUser };
