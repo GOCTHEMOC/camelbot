@@ -19,9 +19,6 @@ try {
     active: false,
     startTimestamp: null,
     submissions: {},
-    pollMessageId: null,
-    pollPosted: false,
-    winnerPosted: false,
     submissionOpened: false
   };
 }
@@ -30,18 +27,36 @@ function saveState() {
   fs.writeFileSync("./motwState.json", JSON.stringify(state, null, 2));
 }
 
+// ================= FSM DEFINITIONS =================
+const MOTW_STATE = {
+  SEARCH_1: "SEARCH_1",
+  PICK_1: "PICK_1",
+  SEARCH_2: "SEARCH_2",
+  PICK_2: "PICK_2",
+  CONFIRM: "CONFIRM"
+};
+
 // ================= CLIENT =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.MessageContent
   ],
   partials: [Partials.Channel]
 });
 
-// in-memory sessions
-client.sessions = {};
+client.sessions = new Map();
+
+// auto-clean sessions (prevents memory leaks)
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, s] of client.sessions.entries()) {
+    if (now - s.createdAt > 10 * 60 * 1000) {
+      client.sessions.delete(id);
+    }
+  }
+}, 60 * 1000);
 
 // ================= OMDB =================
 async function searchMovies(query) {
@@ -51,10 +66,8 @@ async function searchMovies(query) {
     );
 
     if (!res.data?.Search) return [];
-
     return res.data.Search.slice(0, 6);
-  } catch (err) {
-    console.log("OMDB search error:", err.message);
+  } catch {
     return [];
   }
 }
@@ -65,9 +78,8 @@ async function getMovie(id) {
       `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${id}&plot=short`
     );
 
-    return res.data;
-  } catch (err) {
-    console.log("OMDB fetch error:", err.message);
+    return res.data || null;
+  } catch {
     return null;
   }
 }
@@ -79,219 +91,228 @@ client.once(Events.ClientReady, async () => {
   try {
     const ch = await client.channels.fetch(process.env.COMMAND_CHANNEL_ID);
     if (ch) ch.send("Camelbot is up.");
-  } catch (err) {
-    console.log("Failed to send startup message:", err.message);
-  }
+  } catch {}
 });
 
-// ================= MESSAGE HANDLER =================
+// ================= MAIN HANDLER =================
 client.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return;
 
     const uid = message.author.id;
     const content = message.content.trim();
-    const session = client.sessions[uid];
+    const session = client.sessions.get(uid);
 
-    // =========================================================
-    // SESSION FLOW HANDLER (LOOKUP + MOTW)
-    // =========================================================
-    if (session) {
+    // =====================================================
+    // NO SESSION → COMMANDS ONLY
+    // =====================================================
+    if (!session) {
 
-      // ================= LOOKUP =================
-      if (session.type === "lookup") {
-        const choice = parseInt(content);
+      if (content === "/camelhelp") {
+        return message.reply("/lookup, /entermotw, /startmotw, /stopmotw");
+      }
 
-        if (isNaN(choice) || choice < 0 || choice > 6) {
-          return message.reply("Pick a number 0–6.");
-        }
+      if (content === "/startmotw") {
+        state.active = true;
+        state.submissionOpened = true;
+        state.submissions = {};
+        state.startTimestamp = Date.now();
+        saveState();
+        return message.reply("MOTW started.");
+      }
 
-        if (choice === 0) {
-          delete client.sessions[uid];
-          return message.reply("Cancelled.");
-        }
+      if (content === "/stopmotw") {
+        state.active = false;
+        state.submissionOpened = false;
+        saveState();
+        return message.reply("MOTW stopped.");
+      }
 
-        const movie = session.results?.[choice - 1];
-        if (!movie) return message.reply("Invalid selection.");
+      // lookup start
+      if (content.startsWith("/lookup")) {
+        const query = content.replace("/lookup", "").trim();
+        if (!query) return message.reply("Provide a movie name.");
 
-        const details = await getMovie(movie.imdbID);
-        delete client.sessions[uid];
+        const results = await searchMovies(query);
+        if (!results.length) return message.reply("No results.");
 
-        if (!details) return message.reply("Failed to fetch movie details.");
+        client.sessions.set(uid, {
+          type: "lookup",
+          results,
+          createdAt: Date.now()
+        });
 
-        return message.reply(
+        let msg = "Pick 0–6:\n0: Cancel\n";
+        results.forEach((m, i) => {
+          msg += `${i + 1}: ${m.Title} (${m.Year})\n`;
+        });
+
+        return message.reply(msg);
+      }
+
+      // motw start
+      if (content === "/entermotw") {
+        if (!state.active) return message.reply("No active MOTW.");
+        if (!state.submissionOpened) return message.reply("Closed.");
+
+        client.sessions.set(uid, {
+          type: "motw",
+          state: MOTW_STATE.SEARCH_1,
+          selected: [],
+          results: null,
+          createdAt: Date.now()
+        });
+
+        return message.reply("Enter Movie 1 search:");
+      }
+
+      return;
+    }
+
+    // =====================================================
+    // LOOKUP FLOW
+    // =====================================================
+    if (session.type === "lookup") {
+      const choice = parseInt(content);
+
+      if (isNaN(choice) || choice < 0 || choice > session.results.length) {
+        return message.reply("Invalid selection.");
+      }
+
+      if (choice === 0) {
+        client.sessions.delete(uid);
+        return message.reply("Cancelled.");
+      }
+
+      const movie = session.results[choice - 1];
+      const details = await getMovie(movie.imdbID);
+
+      client.sessions.delete(uid);
+
+      if (!details) return message.reply("Failed to fetch movie.");
+
+      return message.reply(
 `${details.Title} (${details.Year})
 Director: ${details.Director}
 Cast: ${details.Actors}
 IMDB: https://www.imdb.com/title/${details.imdbID}/`
+      );
+    }
+
+    // =====================================================
+    // MOTW FLOW (FULL FSM)
+    // =====================================================
+    if (session.type === "motw") {
+
+      const choice = parseInt(content);
+
+      // ---------------- SEARCH 1 ----------------
+      if (session.state === MOTW_STATE.SEARCH_1) {
+        const results = await searchMovies(content);
+        if (!results.length) return message.reply("No results. Try again:");
+
+        session.results = results;
+        session.state = MOTW_STATE.PICK_1;
+
+        let msg = "Pick Movie 1:\n0: Cancel\n";
+        results.forEach((m, i) => {
+          msg += `${i + 1}: ${m.Title} (${m.Year})\n`;
+        });
+
+        return message.reply(msg);
+      }
+
+      // ---------------- PICK 1 ----------------
+      if (session.state === MOTW_STATE.PICK_1) {
+
+        if (isNaN(choice) || choice < 0 || choice > session.results.length) {
+          return message.reply("Invalid selection.");
+        }
+
+        if (choice === 0) {
+          client.sessions.delete(uid);
+          return message.reply("Cancelled.");
+        }
+
+        session.selected.push(session.results[choice - 1]);
+        session.results = null;
+        session.state = MOTW_STATE.SEARCH_2;
+
+        return message.reply("Enter Movie 2 search:");
+      }
+
+      // ---------------- SEARCH 2 ----------------
+      if (session.state === MOTW_STATE.SEARCH_2) {
+        const results = await searchMovies(content);
+        if (!results.length) return message.reply("No results. Try again:");
+
+        session.results = results;
+        session.state = MOTW_STATE.PICK_2;
+
+        let msg = "Pick Movie 2:\n0: Cancel\n";
+        results.forEach((m, i) => {
+          msg += `${i + 1}: ${m.Title} (${m.Year})\n`;
+        });
+
+        return message.reply(msg);
+      }
+
+      // ---------------- PICK 2 ----------------
+      if (session.state === MOTW_STATE.PICK_2) {
+
+        if (isNaN(choice) || choice < 0 || choice > session.results.length) {
+          return message.reply("Invalid selection.");
+        }
+
+        if (choice === 0) {
+          client.sessions.delete(uid);
+          return message.reply("Cancelled.");
+        }
+
+        session.selected.push(session.results[choice - 1]);
+        session.results = null;
+        session.state = MOTW_STATE.CONFIRM;
+
+        return message.reply(
+`Confirm:
+1. ${session.selected[0].Title}
+2. ${session.selected[1].Title}
+
+Reply YES or NO`
         );
       }
 
-      // ================= MOTW STATE MACHINE =================
-      if (session.type === "motw") {
+      // ---------------- CONFIRM ----------------
+      if (session.state === MOTW_STATE.CONFIRM) {
 
-        const choice = parseInt(content);
+        const lower = content.toLowerCase();
 
-        // ---------------- STEP 1 & 2: PICK MOVIES ----------------
-        if (session.step === 1 || session.step === 2) {
-
-          if (isNaN(choice) || choice < 0 || choice > 6) {
-            return message.reply("Pick a number 0–6.");
-          }
-
-          if (choice === 0) {
-            delete client.sessions[uid];
-            return message.reply("Cancelled.");
-          }
-
-          const movie = session.results?.[choice - 1];
-          if (!movie) return message.reply("Invalid selection.");
-
-          session.selected.push(movie);
-
-          // STEP 1 → STEP 2
-          if (session.step === 1) {
-            session.step = 2;
-            session.results = null;
-            return message.reply("Now enter Movie 2 search:");
-          }
-
-          // STEP 2 → CONFIRM
-          session.step = 3;
-
-          return message.reply(
-`Confirm:
-1. ${session.selected[0]?.Title}
-2. ${session.selected[1]?.Title}
-
-Reply YES or NO`
-          );
+        if (lower === "no") {
+          client.sessions.delete(uid);
+          return message.reply("Cancelled.");
         }
 
-        // ---------------- STEP 3: CONFIRMATION ----------------
-        if (session.step === 3) {
-
-          const lower = content.toLowerCase();
-
-          if (lower === "no") {
-            delete client.sessions[uid];
-            return message.reply("Cancelled.");
-          }
-
-          if (lower !== "yes") {
-            return message.reply("Reply YES or NO.");
-          }
-
-          state.submissions ??= {};
-          if (!state.submissions[uid]) state.submissions[uid] = [];
-
-          for (const m of session.selected) {
-            if (state.submissions[uid].length < 2) {
-              state.submissions[uid].push({
-                title: m.Title,
-                imdb: m.imdbID
-              });
-            }
-          }
-
-          saveState();
-          delete client.sessions[uid];
-
-          return message.reply("Movies submitted successfully.");
+        if (lower !== "yes") {
+          return message.reply("Reply YES or NO.");
         }
+
+        state.submissions ??= {};
+        if (!state.submissions[uid]) state.submissions[uid] = [];
+
+        for (const m of session.selected) {
+          if (state.submissions[uid].length < 2) {
+            state.submissions[uid].push({
+              title: m.Title,
+              imdb: m.imdbID
+            });
+          }
+        }
+
+        saveState();
+        client.sessions.delete(uid);
+
+        return message.reply("Movies submitted successfully.");
       }
-    }
-
-    // =========================================================
-    // COMMANDS
-    // =========================================================
-
-    if (content === "/camelhelp") {
-      return message.reply("/lookup, /entermotw, /startmotw, /stopmotw");
-    }
-
-    if (content === "/startmotw") {
-      state.active = true;
-      state.submissionOpened = true;
-      state.submissions = {};
-      state.startTimestamp = Date.now();
-      saveState();
-
-      return message.reply("MOTW started.");
-    }
-
-    if (content === "/stopmotw") {
-      state.active = false;
-      state.submissionOpened = false;
-      saveState();
-
-      return message.reply("MOTW stopped.");
-    }
-
-    // =========================================================
-    // LOOKUP COMMAND
-    // =========================================================
-    if (content.startsWith("/lookup")) {
-      const query = content.replace("/lookup", "").trim();
-      if (!query) return message.reply("Provide a movie name.");
-
-      const results = await searchMovies(query);
-      if (!results.length) return message.reply("No results.");
-
-      client.sessions[uid] = {
-        type: "lookup",
-        results
-      };
-
-      let msg = "Pick 0–6:\n0: Cancel\n";
-      results.forEach((m, i) => {
-        msg += `${i + 1}: ${m.Title} (${m.Year})\n`;
-      });
-
-      return message.reply(msg);
-    }
-
-    // =========================================================
-    // ENTER MOTW
-    // =========================================================
-    if (content === "/entermotw") {
-
-      if (!state.active) return message.reply("No active MOTW.");
-      if (!state.submissionOpened) return message.reply("Closed.");
-
-      client.sessions[uid] = {
-        type: "motw",
-        step: 1,
-        results: null,
-        selected: []
-      };
-
-      return message.reply("Enter Movie 1 search:");
-    }
-
-    // =========================================================
-    // MOTW SEARCH HANDLER
-    // =========================================================
-    if (
-      session?.type === "motw" &&
-      (session.step === 1 || session.step === 2) &&
-      !session.results
-    ) {
-      const results = await searchMovies(content);
-
-      if (!results.length) {
-        return message.reply("No results. Try again:");
-      }
-
-      session.results = results;
-
-      let msg = `Pick Movie ${session.step} (0–6):\n0: Cancel\n`;
-
-      results.forEach((m, i) => {
-        msg += `${i + 1}: ${m.Title} (${m.Year})\n`;
-      });
-
-      return message.reply(msg);
     }
 
   } catch (err) {
@@ -299,5 +320,4 @@ Reply YES or NO`
   }
 });
 
-// ================= LOGIN =================
 client.login(process.env.TOKEN);
