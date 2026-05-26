@@ -97,7 +97,7 @@ if (content === "/camelhelp") {
   // =========================
   if (content === "/startmotw") {
 
-    if (message.channel.name !== "camelcommands") {
+    if (message.channel.name !== "camel-commands") {
       return message.reply("❌ Use #camelcommands");
     }
 
