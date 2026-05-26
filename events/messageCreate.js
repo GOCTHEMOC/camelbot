@@ -1,213 +1,260 @@
+const axios = require("axios");
+
 const {
-  startSubmission,
-  stopMOTW,
+  movieSearch
+} = require("../services/lookup");
+
+const {
+  askAI
+} = require("../services/ai");
+
+const {
   loadState,
-  saveState
+  saveState,
+  stopMOTW
 } = require("../motwEngine");
-
-const { movieSearch } =
-require("../services/lookup");
-
-const { askAI } =
-require("../services/ai");
 
 module.exports = (client) => {
 
-client.on("messageCreate",
-async (message) => {
+client.on("messageCreate", async (message) => {
 
-if (message.author.bot) return;
+  if (message.author.bot) return;
 
-const content = message.content.trim();
+  const content = message.content.trim();
+  const userId = message.author.id;
 
-const state = loadState();
+  const state = loadState();
 
-if (message.mentions.has(client.user)) {
+  // =========================
+  // 🤖 AI CHAT (MENTION BOT)
+  // =========================
+  if (message.mentions.has(client.user)) {
 
-  const prompt =
-    content.replace(`<@${client.user.id}>`, "");
+    const prompt = content.replace(`<@${client.user.id}>`, "");
 
-  const response = await askAI(prompt);
+    const response = await askAI(prompt);
 
-  return message.reply(response);
-}
-
-if (content === "/startmotw") {
-
-  if (message.channel.name !== "camelcommands") {
-    return;
+    return message.reply(response);
   }
 
-  startSubmission(client);
+  // =========================
+  // 🎬 LOOKUP FOLLOW-UP (FIXED BUG)
+  // =========================
+  const pending = client.pendingLookups?.[userId];
 
-  return message.reply("🎬 MOTW started.");
-}
+  if (pending && pending.channelId === message.channel.id) {
 
-if (content === "/stopmotw") {
+    const num = parseInt(content);
 
-  if (message.channel.name !== "camelcommands") {
-    return;
+    if (!isNaN(num)) {
+
+      const movie = pending.results[num - 1];
+
+      if (!movie) {
+        return message.reply("❌ Invalid selection.");
+      }
+
+      delete client.pendingLookups[userId];
+
+      const full = await axios.get(
+        `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${movie.imdbID}&plot=full`
+      );
+
+      const m = full.data;
+
+      return message.reply(
+`🎬 ${m.Title} (${m.Year})
+Director: ${m.Director}
+Cast: ${m.Actors}
+
+IMDb: https://www.imdb.com/title/${m.imdbID}/`
+      );
+    }
   }
 
-  stopMOTW();
+  // =========================
+  // 🏆 START MOTW
+  // =========================
+  if (content === "/startmotw") {
 
-  return message.reply("🛑 MOTW stopped.");
-}
-
-if (content === "/showmotw") {
-
-  let output =
-`🎬 MOTW
-
-Phase: ${state.phase}
-
-`;
-
-  const submissions = state.submissions;
-
-  if (Object.keys(submissions).length === 0) {
-    output += "No submissions.";
-  }
-
-  for (const userId in submissions) {
-
-    const member =
-      await message.guild.members
-      .fetch(userId)
-      .catch(() => null);
-
-    const username =
-      member ? member.user.username : userId;
-
-    output += `\n👤 ${username}\n`;
-
-    submissions[userId]
-    .forEach((movie, i) => {
-      output += `${i + 1}. ${movie}\n`;
-    });
-
-  }
-
-  return message.channel.send(output);
-}
-
-if (content.startsWith("/lookup ")) {
-
-  const query =
-    content.replace("/lookup ", "");
-
-  const results =
-    await movieSearch(query);
-
-  if (results.length === 0) {
-    return message.reply("No results.");
-  }
-
-  let output = "🎬 Results:\n\n";
-
-  results.slice(0, 6).forEach((m, i) => {
-    output += `${i + 1}. ${m.Title} (${m.Year})\n`;
-  });
-
-  return message.channel.send(output);
-}
-
-if (content === "/entermotw") {
-
-  if (message.channel.name !== "movieoftheweek") {
-    return message.reply(
-      "❌ Only in #movieoftheweek"
-    );
-  }
-
-  if (state.phase !== "submission") {
-    return message.reply(
-      "❌ Submissions are closed."
-    );
-  }
-
-  client.sessions.set(message.author.id, {
-    type: "motw",
-    step: 1,
-    movies: []
-  });
-
-  return message.reply(
-    "🎬 Send your first movie search."
-  );
-}
-
-const session =
-  client.sessions.get(message.author.id);
-
-if (session?.type === "motw") {
-
-  if (session.step === 1 ||
-      session.step === 2) {
-
-    const results =
-      await movieSearch(content);
-
-    if (results.length === 0) {
-      return message.reply("No results.");
+    if (message.channel.name !== "camelcommands") {
+      return message.reply("❌ Use #camelcommands");
     }
 
-    session.results = results.slice(0, 6);
+    const motw = require("../motwEngine");
+    motw.startSubmission(client);
 
-    let output = "Pick a movie:\n\n";
+    return message.reply("🎬 MOTW started.");
+  }
 
-    session.results.forEach((m, i) => {
-      output +=
-`${i + 1}. ${m.Title} (${m.Year})\n`;
-    });
+  // =========================
+  // 🛑 STOP MOTW
+  // =========================
+  if (content === "/stopmotw") {
 
-    session.step = "pick";
+    if (message.channel.name !== "camelcommands") {
+      return message.reply("❌ Use #camelcommands");
+    }
+
+    stopMOTW();
+
+    return message.reply("🛑 MOTW stopped.");
+  }
+
+  // =========================
+  // 📊 SHOW MOTW
+  // =========================
+  if (content === "/showmotw") {
+
+    let output = `🎬 MOTW STATUS\n\nPhase: ${state.phase}\n\n`;
+
+    const subs = state.submissions;
+
+    if (!subs || Object.keys(subs).length === 0) {
+      return message.reply(output + "No submissions yet.");
+    }
+
+    for (const userId in subs) {
+
+      const member = await message.guild.members
+        .fetch(userId)
+        .catch(() => null);
+
+      const name = member ? member.user.username : userId;
+
+      output += `👤 ${name}\n`;
+
+      subs[userId].forEach((movie, i) => {
+        output += `${i + 1}. ${movie}\n`;
+      });
+
+      output += "\n";
+    }
 
     return message.reply(output);
   }
 
-  if (session.step === "pick") {
+  // =========================
+  // 🔎 LOOKUP COMMAND
+  // =========================
+  if (content.startsWith("/lookup ")) {
 
-    const num = parseInt(content);
+    const query = content.replace("/lookup ", "").trim();
 
-    if (
-      isNaN(num) ||
-      num < 1 ||
-      num > session.results.length
-    ) {
-      return message.reply("Invalid choice.");
+    if (!query) {
+      return message.reply("❌ Provide a movie name.");
     }
 
-    const movie =
-      session.results[num - 1].Title;
+    const results = await movieSearch(query);
 
-    session.movies.push(movie);
-
-    if (session.movies.length >= 2) {
-
-      state.submissions[message.author.id] =
-        session.movies;
-
-      saveState(state);
-
-      client.sessions.delete(message.author.id);
-
-      return message.reply(
-`✅ Submitted:
-
-1. ${session.movies[0]}
-2. ${session.movies[1]}`
-      );
+    if (!results.length) {
+      return message.reply("❌ No results found.");
     }
 
-    session.step = 2;
+    const top = results.slice(0, 6);
 
-    return message.reply(
-      "🎬 Send your second movie search."
-    );
+    let msg = "🎬 Pick a movie (reply 1–6):\n\n";
+
+    top.forEach((m, i) => {
+      msg += `${i + 1}. ${m.Title} (${m.Year})\n`;
+    });
+
+    client.pendingLookups = client.pendingLookups || {};
+    client.pendingLookups[userId] = {
+      results: top,
+      channelId: message.channel.id
+    };
+
+    return message.reply(msg);
   }
 
-}
+  // =========================
+  // 🎬 ENTER MOTW
+  // =========================
+  if (content === "/entermotw") {
+
+    if (message.channel.name !== "movieoftheweek") {
+      return message.reply("❌ Only in #movieoftheweek");
+    }
+
+    if (state.phase !== "submission") {
+      return message.reply("❌ Submissions are closed.");
+    }
+
+    client.sessions.set(userId, {
+      type: "motw",
+      step: 1,
+      results: [],
+      selected: []
+    });
+
+    return message.reply("🎬 Send your first movie search.");
+  }
+
+  // =========================
+  // 🧠 MOTW SESSION HANDLER
+  // =========================
+  const session = client.sessions.get(userId);
+
+  if (session?.type === "motw") {
+
+    // STEP: SEARCH PHASE
+    if (session.step === 1 || session.step === 2) {
+
+      const results = await movieSearch(content);
+
+      if (!results.length) {
+        return message.reply("❌ No results. Try again.");
+      }
+
+      const top = results.slice(0, 6);
+      session.results = top;
+
+      let msg = `🎬 Pick Movie ${session.step} (1–6):\n\n`;
+
+      top.forEach((m, i) => {
+        msg += `${i + 1}. ${m.Title} (${m.Year})\n`;
+      });
+
+      session.step = "pick";
+
+      return message.reply(msg);
+    }
+
+    // STEP: PICK PHASE
+    if (session.step === "pick") {
+
+      const num = parseInt(content);
+
+      if (isNaN(num) || num < 1 || num > session.results.length) {
+        return message.reply("❌ Invalid choice.");
+      }
+
+      const movie = session.results[num - 1];
+
+      session.selected.push(movie.Title);
+
+      // SECOND MOVIE DONE
+      if (session.selected.length >= 2) {
+
+        state.submissions[userId] = session.selected;
+        saveState(state);
+
+        client.sessions.delete(userId);
+
+        return message.reply(
+`✅ Submitted:
+
+1. ${session.selected[0]}
+2. ${session.selected[1]}`
+        );
+      }
+
+      session.step = 2;
+
+      return message.reply("🎬 Now search your SECOND movie.");
+    }
+  }
 
 });
 };
