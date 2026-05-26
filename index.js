@@ -10,12 +10,27 @@ const {
 const axios = require("axios");
 const fs = require("fs");
 
-const state = require("./motwState.json");
+// ================= STATE =================
+let state;
+try {
+  state = require("./motwState.json");
+} catch {
+  state = {
+    active: false,
+    startTimestamp: null,
+    submissions: {},
+    pollMessageId: null,
+    pollPosted: false,
+    winnerPosted: false,
+    submissionOpened: false
+  };
+}
 
 function saveState() {
   fs.writeFileSync("./motwState.json", JSON.stringify(state, null, 2));
 }
 
+// ================= CLIENT =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -25,38 +40,52 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// ================= SESSIONS =================
+// in-memory sessions
 client.sessions = {};
 
 // ================= OMDB =================
 async function searchMovies(query) {
-  const res = await axios.get(
-    `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${encodeURIComponent(query)}`
-  );
+  try {
+    const res = await axios.get(
+      `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${encodeURIComponent(query)}`
+    );
 
-  if (!res.data || res.data.Response === "False") return [];
+    if (!res.data?.Search) return [];
 
-  return res.data.Search.slice(0, 6);
+    return res.data.Search.slice(0, 6);
+  } catch (err) {
+    console.log("OMDB search error:", err.message);
+    return [];
+  }
 }
 
 async function getMovie(id) {
-  const res = await axios.get(
-    `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${id}&plot=short`
-  );
-  return res.data;
+  try {
+    const res = await axios.get(
+      `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${id}&plot=short`
+    );
+
+    return res.data;
+  } catch (err) {
+    console.log("OMDB fetch error:", err.message);
+    return null;
+  }
 }
 
 // ================= READY =================
 client.once(Events.ClientReady, async () => {
   console.log(`Camelbot online as ${client.user.tag}`);
 
-  const ch = await client.channels.fetch(process.env.COMMAND_CHANNEL_ID);
-  if (ch) ch.send("Camelbot is up.");
+  try {
+    const ch = await client.channels.fetch(process.env.COMMAND_CHANNEL_ID);
+    if (ch) ch.send("Camelbot is up.");
+  } catch (err) {
+    console.log("Failed to send startup message:", err.message);
+  }
 });
 
-// ================= MESSAGE =================
+// ================= MESSAGE HANDLER =================
 client.on(Events.MessageCreate, async (message) => {
-
   try {
     if (message.author.bot) return;
 
@@ -64,12 +93,13 @@ client.on(Events.MessageCreate, async (message) => {
     const content = message.content.trim();
     const session = client.sessions[uid];
 
-    // ================= SESSION HANDLER (MUST RUN FIRST) =================
+    // =========================================================
+    // SESSION FLOW HANDLER (LOOKUP + MOTW)
+    // =========================================================
     if (session) {
 
-      // ================= LOOKUP PICK =================
+      // ================= LOOKUP =================
       if (session.type === "lookup") {
-
         const choice = parseInt(content);
 
         if (isNaN(choice) || choice < 0 || choice > 6) {
@@ -82,14 +112,12 @@ client.on(Events.MessageCreate, async (message) => {
         }
 
         const movie = session.results?.[choice - 1];
-
-        if (!movie) {
-          return message.reply("Invalid selection.");
-        }
+        if (!movie) return message.reply("Invalid selection.");
 
         const details = await getMovie(movie.imdbID);
-
         delete client.sessions[uid];
+
+        if (!details) return message.reply("Failed to fetch movie details.");
 
         return message.reply(
 `${details.Title} (${details.Year})
@@ -99,78 +127,84 @@ IMDB: https://www.imdb.com/title/${details.imdbID}/`
         );
       }
 
-      // ================= MOTW FLOW =================
+      // ================= MOTW STATE MACHINE =================
       if (session.type === "motw") {
 
         const choice = parseInt(content);
 
-        if (isNaN(choice) || choice < 0 || choice > 6) {
-          return message.reply("Pick a number 0–6.");
-        }
+        // ---------------- STEP 1 & 2: PICK MOVIES ----------------
+        if (session.step === 1 || session.step === 2) {
 
-        if (choice === 0) {
-          delete client.sessions[uid];
-          return message.reply("Cancelled.");
-        }
+          if (isNaN(choice) || choice < 0 || choice > 6) {
+            return message.reply("Pick a number 0–6.");
+          }
 
-        const movie = session.results?.[choice - 1];
+          if (choice === 0) {
+            delete client.sessions[uid];
+            return message.reply("Cancelled.");
+          }
 
-        if (!movie) {
-          return message.reply("Invalid selection.");
-        }
+          const movie = session.results?.[choice - 1];
+          if (!movie) return message.reply("Invalid selection.");
 
-        session.selected.push(movie);
+          session.selected.push(movie);
 
-        // STEP 1 DONE
-        if (session.step === 1) {
-          session.step = 2;
-          session.results = null;
-          return message.reply("Now enter Movie 2 search:");
-        }
+          // STEP 1 → STEP 2
+          if (session.step === 1) {
+            session.step = 2;
+            session.results = null;
+            return message.reply("Now enter Movie 2 search:");
+          }
 
-        // STEP 2 DONE → CONFIRM
-        session.step = 3;
+          // STEP 2 → CONFIRM
+          session.step = 3;
 
-        return message.reply(
+          return message.reply(
 `Confirm:
-1. ${session.selected[0].Title}
-2. ${session.selected[1].Title}
+1. ${session.selected[0]?.Title}
+2. ${session.selected[1]?.Title}
 
 Reply YES or NO`
-        );
-      }
-
-      // ================= CONFIRM =================
-      if (session.type === "motw" && session.step === 3) {
-
-        if (content.toLowerCase() === "no") {
-          delete client.sessions[uid];
-          return message.reply("Cancelled.");
+          );
         }
 
-        if (content.toLowerCase() !== "yes") {
-          return message.reply("Reply YES or NO.");
-        }
+        // ---------------- STEP 3: CONFIRMATION ----------------
+        if (session.step === 3) {
 
-        if (!state.submissions[uid]) state.submissions[uid] = [];
+          const lower = content.toLowerCase();
 
-        session.selected.forEach(m => {
-          if (state.submissions[uid].length < 2) {
-            state.submissions[uid].push({
-              title: m.Title,
-              imdb: m.imdbID
-            });
+          if (lower === "no") {
+            delete client.sessions[uid];
+            return message.reply("Cancelled.");
           }
-        });
 
-        saveState();
-        delete client.sessions[uid];
+          if (lower !== "yes") {
+            return message.reply("Reply YES or NO.");
+          }
 
-        return message.reply("Movies submitted successfully.");
+          state.submissions ??= {};
+          if (!state.submissions[uid]) state.submissions[uid] = [];
+
+          for (const m of session.selected) {
+            if (state.submissions[uid].length < 2) {
+              state.submissions[uid].push({
+                title: m.Title,
+                imdb: m.imdbID
+              });
+            }
+          }
+
+          saveState();
+          delete client.sessions[uid];
+
+          return message.reply("Movies submitted successfully.");
+        }
       }
     }
 
-    // ================= COMMANDS =================
+    // =========================================================
+    // COMMANDS
+    // =========================================================
 
     if (content === "/camelhelp") {
       return message.reply("/lookup, /entermotw, /startmotw, /stopmotw");
@@ -180,6 +214,7 @@ Reply YES or NO`
       state.active = true;
       state.submissionOpened = true;
       state.submissions = {};
+      state.startTimestamp = Date.now();
       saveState();
 
       return message.reply("MOTW started.");
@@ -193,14 +228,14 @@ Reply YES or NO`
       return message.reply("MOTW stopped.");
     }
 
-    // ================= LOOKUP =================
+    // =========================================================
+    // LOOKUP COMMAND
+    // =========================================================
     if (content.startsWith("/lookup")) {
-
       const query = content.replace("/lookup", "").trim();
       if (!query) return message.reply("Provide a movie name.");
 
       const results = await searchMovies(query);
-
       if (!results.length) return message.reply("No results.");
 
       client.sessions[uid] = {
@@ -209,7 +244,6 @@ Reply YES or NO`
       };
 
       let msg = "Pick 0–6:\n0: Cancel\n";
-
       results.forEach((m, i) => {
         msg += `${i + 1}: ${m.Title} (${m.Year})\n`;
       });
@@ -217,16 +251,13 @@ Reply YES or NO`
       return message.reply(msg);
     }
 
-    // ================= ENTER MOTW =================
+    // =========================================================
+    // ENTER MOTW
+    // =========================================================
     if (content === "/entermotw") {
 
-      if (!state.active) {
-        return message.reply("No active MOTW.");
-      }
-
-      if (!state.submissionOpened) {
-        return message.reply("Closed.");
-      }
+      if (!state.active) return message.reply("No active MOTW.");
+      if (!state.submissionOpened) return message.reply("Closed.");
 
       client.sessions[uid] = {
         type: "motw",
@@ -238,9 +269,14 @@ Reply YES or NO`
       return message.reply("Enter Movie 1 search:");
     }
 
-    // ================= MOTW SEARCH STEP =================
-    if (session?.type === "motw" && (session.step === 1 || session.step === 2) && !session.results) {
-
+    // =========================================================
+    // MOTW SEARCH HANDLER
+    // =========================================================
+    if (
+      session?.type === "motw" &&
+      (session.step === 1 || session.step === 2) &&
+      !session.results
+    ) {
       const results = await searchMovies(content);
 
       if (!results.length) {
@@ -263,4 +299,5 @@ Reply YES or NO`
   }
 });
 
+// ================= LOGIN =================
 client.login(process.env.TOKEN);
