@@ -9,6 +9,7 @@
     "discord.js": "^14.0.0",
     "axios": "^1.6.0",
     "better-sqlite3": "^11.0.0",
-    "openai": "^4.0.0"
+    "openai": "^4.0.0",
+    "dotenv": "^16.4.0"
   }
 }
