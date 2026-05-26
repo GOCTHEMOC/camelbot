@@ -71,7 +71,27 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       );
     }
   }
+if (content === "/camelhelp") {
+  return message.reply(
+`🤖 Camelbot Command Directory
 
+🎬 Movie Commands
+/lookup <movie>
+/entermotw
+/showmotw
+
+🏆 Admin (camelcommands only)
+/startmotw
+/stopmotw
+
+🔐 Verification
+👍 Verified role
+🎬 Letterboxd DM flow
+
+🤖 AI
+@Camelbot → chat`
+  );
+}
   // =========================
   // 🏆 START MOTW
   // =========================
