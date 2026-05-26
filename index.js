@@ -15,16 +15,17 @@ const client = new Client({
 
 client.sessions = new Map();
 
-// load event handlers
 require("./events/messageCreate")(client);
 require("./events/reactionAdd")(client);
 require("./events/guildMemberAdd")(client);
 
+const motw = require("./motwEngine");
+
 client.once("ready", async () => {
   console.log(`Camelbot online as ${client.user.tag}`);
 
-  const setupVerify = require("./services/verifyMessage");
-  await setupVerify(client);
+  // MOTW AUTO LOOP START
+  motw.startMOTWLoop(client);
 });
 
 client.login(process.env.TOKEN);
