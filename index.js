@@ -37,7 +37,26 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// ================= SAFE SESSION STORE =================
+// ================= SAFE REPLY WRAPPER =================
+async function safeReply(message, content) {
+  try {
+    return await message.reply(content);
+  } catch (err) {
+    console.log("Reply failed:", err);
+  }
+}
+
+// ================= TIMEOUT WRAPPER =================
+function withTimeout(promise, ms = 8000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Timeout")), ms)
+    )
+  ]);
+}
+
+// ================= SESSION STORE =================
 client.entermotwSessions = client.entermotwSessions || {};
 
 // ================= MOTW ENGINE =================
@@ -48,46 +67,38 @@ async function runMOTWCycle() {
   try {
     channel = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID);
   } catch (err) {
-    console.log("MOTW channel fetch failed:", err);
+    console.log("Channel fetch failed:", err);
     return;
   }
 
   const now = Date.now();
-  const diffDays = Math.floor((now - state.startTimestamp) / (1000 * 60 * 60 * 24));
+  const diffDays = Math.floor((now - state.startTimestamp) / 86400000);
 
   try {
-    // OPEN SUBMISSIONS
     if (diffDays >= 0 && !state.submissionOpened) {
       state.submissionOpened = true;
       await channel.send(`<@&${process.env.MOTW_ROLE_ID}> Submissions OPEN. Use /entermotw`);
       saveState();
     }
 
-    // POLL PHASE
     if (diffDays >= 3 && !state.pollPosted) {
       const all = Object.values(state.submissions).flat().slice(0, 5);
       if (!all.length) return;
 
-      const rows = [];
       state.voteCounts = {};
       state.userVotes = state.userVotes || {};
 
-      all.forEach((movie, index) => {
-        state.voteCounts[movie] = 0;
-
-        rows.push(
-          new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`vote_${index}`)
-              .setLabel(movie.slice(0, 80))
-              .setStyle(ButtonStyle.Primary)
-          )
-        );
-      });
+      const rows = all.map((m, i) =>
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`vote_${i}`)
+            .setLabel(m.slice(0, 80))
+            .setStyle(ButtonStyle.Primary)
+        )
+      );
 
       const msg = await channel.send({
-        content: "Movie of the Week Voting",
-        components: rows
+        content: "Movie of the Week Voting"
       });
 
       state.pollMessageId = msg.id;
@@ -95,17 +106,16 @@ async function runMOTWCycle() {
       saveState();
     }
 
-    // WINNER PHASE
     if (diffDays >= 5 && !state.winnerPosted) {
       const winner = Object.entries(state.voteCounts || {})
         .sort((a, b) => b[1] - a[1])[0];
 
       await channel.send(`Winner: ${winner?.[0] || "None"}`);
+
       state.winnerPosted = true;
       saveState();
     }
 
-    // RESET CYCLE
     if (diffDays >= 7) {
       state.startTimestamp = Date.now();
       state.submissionOpened = false;
@@ -114,73 +124,27 @@ async function runMOTWCycle() {
       state.submissions = {};
       state.voteCounts = {};
       state.userVotes = {};
-      state.pollMessageId = null;
       saveState();
     }
 
   } catch (err) {
-    console.log("MOTW cycle error:", err);
+    console.log("MOTW error:", err);
   }
 }
 
-// ================= STARTUP =================
+// ================= READY =================
 client.once(Events.ClientReady, async () => {
-  try {
-    console.log(`Camelbot online as ${client.user.tag}`);
-    await runMOTWCycle();
-  } catch (err) {
-    console.log("Startup error:", err);
-  }
+  console.log(`Camelbot online as ${client.user.tag}`);
 });
-
-// ================= VOTING =================
-client.on(Events.InteractionCreate, async (interaction) => {
-  try {
-    if (!interaction.isButton()) return;
-
-    const userId = interaction.user.id;
-
-    const all = Object.values(state.submissions).flat().slice(0, 5);
-    const index = parseInt(interaction.customId.replace("vote_", ""));
-    const movie = all[index];
-
-    if (!movie) {
-      return interaction.reply({ content: "Invalid vote.", ephemeral: true });
-    }
-
-    state.userVotes = state.userVotes || {};
-    state.voteCounts = state.voteCounts || {};
-
-    const previous = state.userVotes[userId];
-
-    if (previous === movie) {
-      return interaction.reply({ content: "Already voted.", ephemeral: true });
-    }
-
-    if (previous) state.voteCounts[previous]--;
-
-    state.userVotes[userId] = movie;
-    state.voteCounts[movie] = (state.voteCounts[movie] || 0) + 1;
-
-    saveState();
-
-    return interaction.reply({ content: "Vote recorded.", ephemeral: true });
-
-  } catch (err) {
-    console.log("Interaction error:", err);
-  }
-});
-
-// ================= ENTEMOTW SESSIONS =================
-client.entermotwSessions = client.entermotwSessions || {};
 
 // ================= MESSAGE HANDLER =================
 client.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return;
 
-    const isDM = message.channel.type === 1;
-    const isMention = message.mentions.users.has(client.user.id);
+    console.log("MSG:", message.content);
+
+    const uid = message.author.id;
 
     const COMMAND_CHANNEL = process.env.COMMAND_CHANNEL_ID;
     const MOVIE_CHANNEL = process.env.MOVIE_CHANNEL_ID;
@@ -194,7 +158,12 @@ client.on(Events.MessageCreate, async (message) => {
       message.channel.id !== COMMAND_CHANNEL &&
       message.channel.id !== MOVIE_CHANNEL
     ) {
-      return message.reply("Use correct channel.");
+      return safeReply(message, "Wrong channel.");
+    }
+
+    // ================= PING TEST =================
+    if (message.content === "/ping") {
+      return safeReply(message, "pong");
     }
 
     // ================= START MOTW =================
@@ -204,14 +173,14 @@ client.on(Events.MessageCreate, async (message) => {
       if (arg === "0/00/0000") {
         state.active = false;
         saveState();
-        return message.reply("MOTW stopped.");
+        return safeReply(message, "MOTW stopped.");
       }
 
       const match = arg?.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
       if (!match) {
         state.active = false;
         saveState();
-        return message.reply("Invalid date. MOTW stopped.");
+        return safeReply(message, "Invalid date.");
       }
 
       const [_, mm, dd, yyyy] = match;
@@ -220,7 +189,7 @@ client.on(Events.MessageCreate, async (message) => {
       if (start.getTime() < Date.now()) {
         state.active = false;
         saveState();
-        return message.reply("Past date. MOTW stopped.");
+        return safeReply(message, "Past date rejected.");
       }
 
       state.active = true;
@@ -234,32 +203,30 @@ client.on(Events.MessageCreate, async (message) => {
       state.userVotes = {};
 
       saveState();
-      await runMOTWCycle();
 
-      return message.reply("MOTW started.");
+      return safeReply(message, "MOTW started.");
     }
 
     // ================= ENTEMOTW =================
     if (message.content.startsWith("/entermotw")) {
 
       if (message.channel.id !== process.env.MOVIE_CHANNEL_ID) {
-        return message.reply("Movie channel only.");
+        return safeReply(message, "Movie channel only.");
       }
 
       if (!state.active || !state.submissionOpened) {
-        return message.reply("Submissions closed.");
+        return safeReply(message, "Submissions closed.");
       }
 
       const input = message.content.replace("/entermotw", "").trim();
-      if (!input) return message.reply("Provide movies.");
+      if (!input) return safeReply(message, "Provide movies.");
 
       const queries = input.split(",").map(x => x.trim()).filter(Boolean);
-      const uid = message.author.id;
 
       if (!state.submissions[uid]) state.submissions[uid] = [];
 
       if (state.submissions[uid].length >= 2) {
-        return message.reply("Max 2 movies.");
+        return safeReply(message, "Max 2 movies.");
       }
 
       client.entermotwSessions[uid] = {
@@ -283,16 +250,22 @@ client.on(Events.MessageCreate, async (message) => {
 
         delete client.entermotwSessions[uid];
 
-        return message.reply(
+        return safeReply(
+          message,
           `Done. Entered: ${session.collected.join(", ")}`
         );
       }
 
       const query = session.queue.shift();
 
-      const search = await axios.get(
-        `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${encodeURIComponent(query)}`
-      );
+      let search;
+      try {
+        search = await withTimeout(
+          axios.get(`https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${encodeURIComponent(query)}`)
+        );
+      } catch {
+        return processNextMovie(message);
+      }
 
       const results = (search.data.Search || []).slice(0, 6);
 
@@ -306,13 +279,12 @@ client.on(Events.MessageCreate, async (message) => {
         text += `${i + 1}. ${m.Title} (${m.Year})\n`;
       });
 
-      text += `\nReply 1-6 or 0 to skip`;
+      text += `\nReply 1-6 or 0`;
 
-      return message.reply(text);
+      return safeReply(message, text);
     }
 
     // ================= SELECTION =================
-    const uid = message.author.id;
     const session = client.entermotwSessions[uid];
 
     if (session?.awaiting) {
@@ -326,11 +298,16 @@ client.on(Events.MessageCreate, async (message) => {
       const index = parseInt(val) - 1;
       const selected = session.current?.[index];
 
-      if (!selected) return message.reply("Invalid.");
+      if (!selected) return safeReply(message, "Invalid.");
 
-      const full = await axios.get(
-        `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${selected.imdbID}&plot=full`
-      );
+      let full;
+      try {
+        full = await withTimeout(
+          axios.get(`https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${selected.imdbID}&plot=full`)
+        );
+      } catch {
+        return safeReply(message, "Lookup failed.");
+      }
 
       session.collected.push(full.data.Title);
       session.awaiting = false;
@@ -338,21 +315,27 @@ client.on(Events.MessageCreate, async (message) => {
       return processNextMovie(message);
     }
 
-    // ================= AI =================
-    if (isDM || isMention) {
-      const prompt = isMention
-        ? message.content.replace(`<@${client.user.id}>`, "").trim()
-        : message.content;
+    // ================= AI CHAT =================
+    if (message.mentions.users.has(client.user.id) || message.channel.type === 1) {
 
-      const res = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "You are Camelbot." },
-          { role: "user", content: prompt }
-        ]
-      });
+      const prompt = message.content.replace(`<@${client.user.id}>`, "").trim();
 
-      return message.reply(res.choices[0].message.content);
+      let res;
+      try {
+        res = await withTimeout(
+          openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: "You are Camelbot." },
+              { role: "user", content: prompt }
+            ]
+          })
+        );
+      } catch {
+        return safeReply(message, "AI error.");
+      }
+
+      return safeReply(message, res.choices[0].message.content);
     }
 
   } catch (err) {
@@ -362,7 +345,7 @@ client.on(Events.MessageCreate, async (message) => {
 
 // ================= LOOP =================
 setInterval(() => {
-  runMOTWCycle().catch(err => console.log("Loop crash:", err));
+  runMOTWCycle().catch(err => console.log("Loop error:", err));
 }, 60 * 60 * 1000);
 
 // ================= LOGIN =================
