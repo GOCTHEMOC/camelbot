@@ -80,8 +80,6 @@ async function runMOTWCycle() {
     }
 
     if (diffDays >= 3 && !state.pollPosted) {
-      const all = Object.values(state.submissions).flat().slice(0, 5);
-
       state.voteCounts = {};
       state.userVotes = {};
 
@@ -161,21 +159,30 @@ client.on(Events.MessageCreate, async (message) => {
       );
     }
 
-    // ================= START MOTW =================
+    // ================= START MOTW (WITH BROADCASTS) =================
     if (content.startsWith("/startmotw")) {
       const arg = content.split(" ")[1];
 
+      const movieChannel = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID);
+
+      // ================= CANCEL =================
       if (arg === "0/00/0000") {
         state.active = false;
         saveState();
-        return message.channel.send("MOTW stopped.");
+
+        await message.channel.send("MOTW stopped.");
+
+        if (movieChannel) {
+          movieChannel.send("Movie of the Week has been cancelled.");
+        }
+
+        return;
       }
 
+      // ================= VALIDATE =================
       const match = arg?.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
       if (!match) {
-        state.active = false;
-        saveState();
-        return message.channel.send("Invalid date.");
+        return message.channel.send("Invalid date format.");
       }
 
       const start = new Date(arg);
@@ -192,7 +199,11 @@ client.on(Events.MessageCreate, async (message) => {
 
       saveState();
 
-      return message.channel.send("MOTW started.");
+      await message.channel.send("MOTW started.");
+
+      if (movieChannel) {
+        movieChannel.send(`Movie of the Week has started!\nStart date: ${arg}`);
+      }
     }
 
     // ================= ENTER MOTW =================
