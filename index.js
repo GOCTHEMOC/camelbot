@@ -15,7 +15,7 @@ const client = new Client({
 
 client.sessions = new Map();
 
-// load events
+// load event handlers
 require("./events/messageCreate")(client);
 require("./events/reactionAdd")(client);
 require("./events/guildMemberAdd")(client);
