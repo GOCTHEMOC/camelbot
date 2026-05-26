@@ -4,10 +4,7 @@ const {
   Client,
   GatewayIntentBits,
   Partials,
-  Events,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle
+  Events
 } = require("discord.js");
 
 const axios = require("axios");
@@ -31,32 +28,34 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.DirectMessages
   ],
   partials: [Partials.Channel]
 });
 
-// ================= SAFE REPLY WRAPPER =================
-async function safeReply(message, content) {
+// ================= SAFE REPLY =================
+async function safeSend(channel, content) {
   try {
-    return await message.reply(content);
+    return await channel.send(content);
   } catch (err) {
-    console.log("Reply failed:", err);
+    console.log("Send failed:", err);
   }
 }
 
-// ================= TIMEOUT WRAPPER =================
-function withTimeout(promise, ms = 8000) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Timeout")), ms)
-    )
-  ]);
+// ================= PST TIME HELPERS =================
+function getPSTNow() {
+  const now = new Date();
+  const pst = new Date(
+    now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" })
+  );
+  return pst;
 }
 
-// ================= SESSION STORE =================
+function parsePSTDate(mm, dd, yyyy) {
+  return new Date(Date.UTC(yyyy, mm - 1, dd));
+}
+
+// ================= CLIENT STORAGE =================
 client.entermotwSessions = client.entermotwSessions || {};
 
 // ================= MOTW ENGINE =================
@@ -71,13 +70,15 @@ async function runMOTWCycle() {
     return;
   }
 
-  const now = Date.now();
-  const diffDays = Math.floor((now - state.startTimestamp) / 86400000);
+  const now = getPSTNow();
+  const start = new Date(state.startTimestamp);
+
+  const diffDays = Math.floor((now - start) / 86400000);
 
   try {
     if (diffDays >= 0 && !state.submissionOpened) {
       state.submissionOpened = true;
-      await channel.send(`<@&${process.env.MOTW_ROLE_ID}> Submissions OPEN. Use /entermotw`);
+      await safeSend(channel, `<@&${process.env.MOTW_ROLE_ID}> Submissions OPEN`);
       saveState();
     }
 
@@ -86,22 +87,10 @@ async function runMOTWCycle() {
       if (!all.length) return;
 
       state.voteCounts = {};
-      state.userVotes = state.userVotes || {};
+      state.userVotes = {};
 
-      const rows = all.map((m, i) =>
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`vote_${i}`)
-            .setLabel(m.slice(0, 80))
-            .setStyle(ButtonStyle.Primary)
-        )
-      );
+      await safeSend(channel, "Movie of the Week Voting");
 
-      const msg = await channel.send({
-        content: "Movie of the Week Voting"
-      });
-
-      state.pollMessageId = msg.id;
       state.pollPosted = true;
       saveState();
     }
@@ -110,7 +99,7 @@ async function runMOTWCycle() {
       const winner = Object.entries(state.voteCounts || {})
         .sort((a, b) => b[1] - a[1])[0];
 
-      await channel.send(`Winner: ${winner?.[0] || "None"}`);
+      await safeSend(channel, `Winner: ${winner?.[0] || "None"}`);
 
       state.winnerPosted = true;
       saveState();
@@ -133,7 +122,7 @@ async function runMOTWCycle() {
 }
 
 // ================= READY =================
-client.once(Events.ClientReady, async () => {
+client.once(Events.ClientReady, () => {
   console.log(`Camelbot online as ${client.user.tag}`);
 });
 
@@ -142,54 +131,81 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     if (message.author.bot) return;
 
-    console.log("MSG:", message.content);
-
     const uid = message.author.id;
 
     const COMMAND_CHANNEL = process.env.COMMAND_CHANNEL_ID;
     const MOVIE_CHANNEL = process.env.MOVIE_CHANNEL_ID;
 
-    const isCommand =
-      message.content.startsWith("/startmotw") ||
-      message.content.startsWith("/entermotw");
+    const content = message.content.trim();
+    const cmd = content.split(" ")[0];
+
+    // ================= CHANNEL RESTRICTIONS (ONLY MOTW) =================
+    const restricted = ["/startmotw", "/entermotw"];
 
     if (
-      isCommand &&
+      restricted.includes(cmd) &&
       message.channel.id !== COMMAND_CHANNEL &&
       message.channel.id !== MOVIE_CHANNEL
     ) {
-      return safeReply(message, "Wrong channel.");
+      return message.channel.send("Wrong channel.");
     }
 
-    // ================= PING TEST =================
-    if (message.content === "/ping") {
-      return safeReply(message, "pong");
+    // ================= GLOBAL COMMANDS =================
+
+    if (content === "/ping") {
+      return message.channel.send("pong");
     }
 
-    // ================= START MOTW =================
-    if (message.content.startsWith("/startmotw")) {
-      const arg = message.content.split(" ")[1];
+    if (content === "/camelhelp") {
+      return message.channel.send(
+`Camelbot Commands:
+
+/startmotw MM/DD/YYYY - start MOTW
+/startmotw 0/00/0000 - stop MOTW
+
+/entermotw movie1, movie2 - submit movies (max 2)
+
+/lookup movie - movie info
+
+/ping - test bot`
+      );
+    }
+
+    // ================= START MOTW (PST SAFE) =================
+    if (content.startsWith("/startmotw")) {
+      const arg = content.split(" ")[1];
 
       if (arg === "0/00/0000") {
         state.active = false;
         saveState();
-        return safeReply(message, "MOTW stopped.");
+        return message.channel.send("MOTW stopped.");
       }
 
       const match = arg?.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
       if (!match) {
         state.active = false;
         saveState();
-        return safeReply(message, "Invalid date.");
+        return message.channel.send("Invalid date.");
       }
 
       const [_, mm, dd, yyyy] = match;
-      const start = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
 
-      if (start.getTime() < Date.now()) {
+      const start = parsePSTDate(mm, dd, Number(yyyy));
+
+      const now = getPSTNow();
+
+      const isPast =
+        start.getFullYear() < now.getFullYear() ||
+        (start.getFullYear() === now.getFullYear() &&
+          start.getMonth() < now.getMonth()) ||
+        (start.getFullYear() === now.getFullYear() &&
+          start.getMonth() === now.getMonth() &&
+          start.getDate() < now.getDate());
+
+      if (isPast) {
         state.active = false;
         saveState();
-        return safeReply(message, "Past date rejected.");
+        return message.channel.send("Past date rejected (PST).");
       }
 
       state.active = true;
@@ -204,138 +220,45 @@ client.on(Events.MessageCreate, async (message) => {
 
       saveState();
 
-      return safeReply(message, "MOTW started.");
+      return message.channel.send("MOTW started (PST mode).");
     }
 
-    // ================= ENTEMOTW =================
-    if (message.content.startsWith("/entermotw")) {
+    // ================= LOOKUP (GLOBAL) =================
+    if (content.startsWith("/lookup")) {
+      const query = content.replace("/lookup", "").trim();
+      if (!query) return message.channel.send("Provide movie.");
 
-      if (message.channel.id !== process.env.MOVIE_CHANNEL_ID) {
-        return safeReply(message, "Movie channel only.");
+      const res = await axios.get(
+        `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&t=${encodeURIComponent(query)}&plot=full`
+      );
+
+      if (!res.data || res.data.Response === "False") {
+        return message.channel.send("Not found.");
       }
 
-      if (!state.active || !state.submissionOpened) {
-        return safeReply(message, "Submissions closed.");
-      }
-
-      const input = message.content.replace("/entermotw", "").trim();
-      if (!input) return safeReply(message, "Provide movies.");
-
-      const queries = input.split(",").map(x => x.trim()).filter(Boolean);
-
-      if (!state.submissions[uid]) state.submissions[uid] = [];
-
-      if (state.submissions[uid].length >= 2) {
-        return safeReply(message, "Max 2 movies.");
-      }
-
-      client.entermotwSessions[uid] = {
-        queue: queries,
-        collected: []
-      };
-
-      return processNextMovie(message);
-    }
-
-    // ================= MOVIE FLOW =================
-    async function processNextMovie(message) {
-      const uid = message.author.id;
-      const session = client.entermotwSessions[uid];
-
-      if (!session) return;
-
-      if (session.queue.length === 0) {
-        state.submissions[uid].push(...session.collected);
-        saveState();
-
-        delete client.entermotwSessions[uid];
-
-        return safeReply(
-          message,
-          `Done. Entered: ${session.collected.join(", ")}`
-        );
-      }
-
-      const query = session.queue.shift();
-
-      let search;
-      try {
-        search = await withTimeout(
-          axios.get(`https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${encodeURIComponent(query)}`)
-        );
-      } catch {
-        return processNextMovie(message);
-      }
-
-      const results = (search.data.Search || []).slice(0, 6);
-
-      if (!results.length) return processNextMovie(message);
-
-      session.current = results;
-      session.awaiting = true;
-
-      let text = `Select for: ${query}\n`;
-      results.forEach((m, i) => {
-        text += `${i + 1}. ${m.Title} (${m.Year})\n`;
-      });
-
-      text += `\nReply 1-6 or 0`;
-
-      return safeReply(message, text);
-    }
-
-    // ================= SELECTION =================
-    const session = client.entermotwSessions[uid];
-
-    if (session?.awaiting) {
-      const val = message.content.trim();
-
-      if (val === "0") {
-        session.awaiting = false;
-        return processNextMovie(message);
-      }
-
-      const index = parseInt(val) - 1;
-      const selected = session.current?.[index];
-
-      if (!selected) return safeReply(message, "Invalid.");
-
-      let full;
-      try {
-        full = await withTimeout(
-          axios.get(`https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${selected.imdbID}&plot=full`)
-        );
-      } catch {
-        return safeReply(message, "Lookup failed.");
-      }
-
-      session.collected.push(full.data.Title);
-      session.awaiting = false;
-
-      return processNextMovie(message);
+      return message.channel.send(
+`${res.data.Title} (${res.data.Year})
+Director: ${res.data.Director}
+Cast: ${res.data.Actors}
+IMDB: https://www.imdb.com/title/${res.data.imdbID}/
+Plot: ${res.data.Plot}`
+      );
     }
 
     // ================= AI CHAT =================
     if (message.mentions.users.has(client.user.id) || message.channel.type === 1) {
 
-      const prompt = message.content.replace(`<@${client.user.id}>`, "").trim();
+      const prompt = content.replace(`<@${client.user.id}>`, "").trim();
 
-      let res;
-      try {
-        res = await withTimeout(
-          openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [
-              { role: "system", content: "You are Camelbot." },
-              { role: "user", content: prompt }
-            ]
-          })
-        );
-      } catch {
-        return safeReply(message, "AI error.");
-      }
+      const res = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "You are Camelbot." },
+          { role: "user", content: prompt }
+        ]
+      });
 
-      return safeReply(message, res.choices[0].message.content);
+      return message.channel.send(res.choices[0].message.content);
     }
 
   } catch (err) {
@@ -345,7 +268,7 @@ client.on(Events.MessageCreate, async (message) => {
 
 // ================= LOOP =================
 setInterval(() => {
-  runMOTWCycle().catch(err => console.log("Loop error:", err));
+  runMOTWCycle().catch(console.log);
 }, 60 * 60 * 1000);
 
 // ================= LOGIN =================
