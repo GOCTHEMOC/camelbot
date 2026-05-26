@@ -44,67 +44,19 @@ async function safeSend(channel, content) {
   }
 }
 
-// ================= MOTW LOOP =================
-async function runMOTWCycle() {
-  if (!state.active || !state.startTimestamp) return;
-
-  let channel;
-  try {
-    channel = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID);
-  } catch (err) {
-    console.log("MOTW channel fetch failed:", err);
-    return;
-  }
-
-  const now = Date.now();
-  const diffDays = Math.floor((now - state.startTimestamp) / 86400000);
-
-  try {
-    if (diffDays >= 0 && !state.submissionOpened) {
-      state.submissionOpened = true;
-      await safeSend(channel, `<@&${process.env.MOTW_ROLE_ID}> Submissions OPEN`);
-      saveState();
-    }
-
-    if (diffDays >= 3 && !state.pollPosted) {
-      state.voteCounts = {};
-      state.userVotes = {};
-
-      await safeSend(channel, "Movie of the Week Voting");
-
-      state.pollPosted = true;
-      saveState();
-    }
-
-    if (diffDays >= 5 && !state.winnerPosted) {
-      const winner = Object.entries(state.voteCounts || {})
-        .sort((a, b) => b[1] - a[1])[0];
-
-      await safeSend(channel, `Winner: ${winner?.[0] || "None"}`);
-
-      state.winnerPosted = true;
-      saveState();
-    }
-
-    if (diffDays >= 7) {
-      state.startTimestamp = Date.now();
-      state.submissionOpened = false;
-      state.pollPosted = false;
-      state.winnerPosted = false;
-      state.submissions = {};
-      state.voteCounts = {};
-      state.userVotes = {};
-      saveState();
-    }
-
-  } catch (err) {
-    console.log("MOTW error:", err);
-  }
-}
-
 // ================= READY =================
 client.once(Events.ClientReady, async () => {
   console.log(`Camelbot online as ${client.user.tag}`);
+
+  try {
+    const channel = await client.channels.fetch(process.env.COMMAND_CHANNEL_ID);
+
+    if (channel) {
+      channel.send("Camelbot is up.");
+    }
+  } catch (err) {
+    console.log("Startup message failed:", err);
+  }
 });
 
 // ================= MESSAGE HANDLER =================
@@ -120,9 +72,13 @@ client.on(Events.MessageCreate, async (message) => {
 
     const cmd = content.split(" ")[0];
 
-    // ================= STRICT CHANNEL RULES =================
+    // ================= CHANNEL RULES =================
     if (cmd === "/startmotw" && message.channel.id !== COMMAND_CHANNEL) {
       return message.channel.send("Use command channel for /startmotw.");
+    }
+
+    if (cmd === "/stopmotw" && message.channel.id !== COMMAND_CHANNEL) {
+      return message.channel.send("Use command channel for /stopmotw.");
     }
 
     if (cmd === "/entermotw" && message.channel.id !== MOVIE_CHANNEL) {
@@ -134,7 +90,8 @@ client.on(Events.MessageCreate, async (message) => {
       return message.channel.send(
 `Camelbot Commands:
 
-/startmotw MM/DD/YYYY
+/startmotw
+/stopmotw
 /entermotw movie1, movie2
 /lookup movie
 /ping`
@@ -147,56 +104,10 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     // ================= START MOTW =================
-    if (content.startsWith("/startmotw")) {
-      const arg = content.split(" ")[1];
+    if (content === "/startmotw") {
 
-      const movieChannel = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID);
-
-      // ================= CANCEL =================
-      if (arg === "0/00/0000") {
-        state.active = false;
-        state.submissionOpened = false;
-        saveState();
-
-        await message.channel.send("MOTW stopped.");
-
-        if (movieChannel) {
-          movieChannel.send("Movie of the Week has been cancelled.");
-        }
-
-        return;
-      }
-
-      // ================= FORMAT CHECK =================
-      const match = arg?.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-      if (!match) {
-        return message.channel.send("Invalid date format MM/DD/YYYY.");
-      }
-
-      const start = new Date(arg);
-
-      const now = Date.now();
-
-      // ================= PAST DATE = CANCEL =================
-      if (start.getTime() < now) {
-        state.active = false;
-        state.submissionOpened = false;
-        saveState();
-
-        await message.channel.send("Past date detected — MOTW cancelled.");
-
-        if (movieChannel) {
-          movieChannel.send("MOTW cancelled (past date provided).");
-        }
-
-        return;
-      }
-
-      // ================= START =================
       state.active = true;
-      state.startTimestamp = start.getTime();
-
-      state.submissionOpened = false;
+      state.submissionOpened = true;
       state.pollPosted = false;
       state.winnerPosted = false;
 
@@ -206,24 +117,41 @@ client.on(Events.MessageCreate, async (message) => {
 
       saveState();
 
-      await message.channel.send("MOTW started.");
+      const movieChannel = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID);
 
+      await message.channel.send("MOTW started.");
       if (movieChannel) {
-        movieChannel.send(`Movie of the Week has started!\nStart date: ${arg}`);
+        movieChannel.send("Movie of the Week has started. Submissions are now open.");
+      }
+    }
+
+    // ================= STOP MOTW =================
+    if (content === "/stopmotw") {
+
+      state.active = false;
+      state.submissionOpened = false;
+      state.pollPosted = false;
+      state.winnerPosted = false;
+
+      saveState();
+
+      const movieChannel = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID);
+
+      await message.channel.send("MOTW stopped.");
+      if (movieChannel) {
+        movieChannel.send("Movie of the Week has been stopped.");
       }
     }
 
     // ================= ENTER MOTW =================
     if (content.startsWith("/entermotw")) {
 
-      console.log("ENTERMOTW HIT");
-
       if (!state.active) {
         return message.channel.send("No active MOTW.");
       }
 
       if (!state.submissionOpened) {
-        return message.channel.send("Submissions are not open yet.");
+        return message.channel.send("Submissions are closed.");
       }
 
       const input = content.replace("/entermotw", "").trim();
@@ -242,7 +170,7 @@ client.on(Events.MessageCreate, async (message) => {
         collected: []
       };
 
-      return message.channel.send("Processing entry...");
+      return message.channel.send("Entry received.");
     }
 
     // ================= LOOKUP =================
@@ -284,11 +212,6 @@ IMDB: https://www.imdb.com/title/${res.data.imdbID}/`
     console.log("Handler crash:", err);
   }
 });
-
-// ================= LOOP =================
-setInterval(() => {
-  runMOTWCycle().catch(console.log);
-}, 60 * 60 * 1000);
 
 // ================= LOGIN =================
 client.login(process.env.TOKEN);
