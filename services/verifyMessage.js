@@ -1,7 +1,8 @@
-const fs = require("fs");
-
 module.exports = async (client) => {
-  const guild = client.guilds.cache.first();
+  const guild = client.guilds.cache.find(g =>
+    g.channels.cache.some(c => c.name === "verify")
+  );
+
   if (!guild) return;
 
   const channel = guild.channels.cache.find(c => c.name === "verify");
@@ -16,7 +17,6 @@ module.exports = async (client) => {
   await msg.react("👍");
   await msg.react("🎬");
 
-  // 🔥 FIX: persist per-guild message ID
   client.verifyMessageId = msg.id;
-  client.verifyChannelId = channel.id;
+  client.verifyGuildId = guild.id;
 };
