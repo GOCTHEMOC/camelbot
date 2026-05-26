@@ -44,20 +44,7 @@ async function safeSend(channel, content) {
   }
 }
 
-// ================= TIME =================
-function getPSTTimestamp() {
-  return new Date().toLocaleString("en-US", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-}
-
-// ================= MOTW ENGINE =================
+// ================= MOTW LOOP =================
 async function runMOTWCycle() {
   if (!state.active || !state.startTimestamp) return;
 
@@ -142,12 +129,7 @@ client.on(Events.MessageCreate, async (message) => {
       return message.channel.send("Use movie channel for /entermotw.");
     }
 
-    // ================= GLOBAL COMMANDS =================
-
-    if (content === "/ping") {
-      return message.channel.send("pong");
-    }
-
+    // ================= HELP =================
     if (content === "/camelhelp") {
       return message.channel.send(
 `Camelbot Commands:
@@ -159,7 +141,12 @@ client.on(Events.MessageCreate, async (message) => {
       );
     }
 
-    // ================= START MOTW (WITH BROADCASTS) =================
+    // ================= PING =================
+    if (content === "/ping") {
+      return message.channel.send("pong");
+    }
+
+    // ================= START MOTW =================
     if (content.startsWith("/startmotw")) {
       const arg = content.split(" ")[1];
 
@@ -168,6 +155,7 @@ client.on(Events.MessageCreate, async (message) => {
       // ================= CANCEL =================
       if (arg === "0/00/0000") {
         state.active = false;
+        state.submissionOpened = false;
         saveState();
 
         await message.channel.send("MOTW stopped.");
@@ -179,20 +167,39 @@ client.on(Events.MessageCreate, async (message) => {
         return;
       }
 
-      // ================= VALIDATE =================
+      // ================= FORMAT CHECK =================
       const match = arg?.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
       if (!match) {
-        return message.channel.send("Invalid date format.");
+        return message.channel.send("Invalid date format MM/DD/YYYY.");
       }
 
       const start = new Date(arg);
 
+      const now = Date.now();
+
+      // ================= PAST DATE = CANCEL =================
+      if (start.getTime() < now) {
+        state.active = false;
+        state.submissionOpened = false;
+        saveState();
+
+        await message.channel.send("Past date detected — MOTW cancelled.");
+
+        if (movieChannel) {
+          movieChannel.send("MOTW cancelled (past date provided).");
+        }
+
+        return;
+      }
+
+      // ================= START =================
       state.active = true;
       state.startTimestamp = start.getTime();
 
       state.submissionOpened = false;
       state.pollPosted = false;
       state.winnerPosted = false;
+
       state.submissions = {};
       state.voteCounts = {};
       state.userVotes = {};
@@ -211,8 +218,12 @@ client.on(Events.MessageCreate, async (message) => {
 
       console.log("ENTERMOTW HIT");
 
-      if (!state.active || !state.submissionOpened) {
-        return message.channel.send("Submissions closed.");
+      if (!state.active) {
+        return message.channel.send("No active MOTW.");
+      }
+
+      if (!state.submissionOpened) {
+        return message.channel.send("Submissions are not open yet.");
       }
 
       const input = content.replace("/entermotw", "").trim();
