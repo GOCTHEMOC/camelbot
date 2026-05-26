@@ -1,8 +1,6 @@
-{
-  "active": false,
-  "phase": "inactive",
-  "weekIndex": 0,
-  "phaseEndsAt": null,
-  "submissions": {},
-  "votes": {}
+const motw = require("../motwEngine");
+
+if (content === "/startmotw") {
+  motw.manualStart(client);
+  return message.reply("🎬 MOTW started (submission phase).");
 }
