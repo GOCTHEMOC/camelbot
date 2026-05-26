@@ -52,7 +52,7 @@ async function runMOTWCycle() {
       state.submissionOpened = true;
 
       await channel.send(
-        `<@&${process.env.MOTW_ROLE_ID}> 🎬 Submissions OPEN! Use /entermotw`
+        `<@&${process.env.MOTW_ROLE_ID}> Submissions OPEN. Use /entermotw`
       );
 
       saveState();
@@ -63,8 +63,8 @@ async function runMOTWCycle() {
       if (!all.length) return;
 
       const poll = await channel.send(
-        `📊 MOVIE POLL:\n\n` +
-        all.map((m, i) => `${i + 1}️⃣ ${m}`).join("\n")
+        `MOVIE POLL:\n\n` +
+        all.map((m, i) => `${i + 1}. ${m}`).join("\n")
       );
 
       state.pollMessageId = poll.id;
@@ -86,7 +86,7 @@ async function runMOTWCycle() {
         }
       }
 
-      await channel.send(`🏆 Winner: ${top}`);
+      await channel.send(`Winner: ${top}`);
 
       state.winnerPosted = true;
       saveState();
@@ -111,7 +111,6 @@ async function runMOTWCycle() {
 // ================= READY =================
 client.once(Events.ClientReady, async () => {
   console.log(`Camelbot online as ${client.user.tag}`);
-
   await runMOTWCycle();
 });
 
@@ -124,23 +123,33 @@ client.on(Events.MessageCreate, async (message) => {
 
   try {
 
-    // ================= COMMANDS FIRST =================
+    // ================= CHANNEL LOCK =================
+    const motwChannel = process.env.MOVIE_CHANNEL_ID;
+    const isMOTWCommand =
+      message.content.startsWith("/startmotw") ||
+      message.content.startsWith("/entermotw");
 
+    if (isMOTWCommand && message.channel.id !== motwChannel) {
+      return message.reply("MOTW commands can only be used in the MOTW channel.");
+    }
+
+    // ================= HELP =================
     if (message.content.startsWith("/camelhelp")) {
       return message.reply(
-`📌 Commands:
+`Commands:
 
 /startmotw MM/DD/YYYY
-/entermotw "movie1, movie2"
-/lookup <movie>
+/entermotw movie1, movie2
+/lookup movie
 /camelhelp
 
-DM or mention → AI chat`
+DM or mention bot for AI chat`
       );
     }
 
+    // ================= LOOKUP =================
     if (message.content.startsWith("/lookup ")) {
-      const q = message.content.replace("/lookup ", "");
+      const q = message.content.replace("/lookup ", "").trim();
 
       const res = await axios.get(
         `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${q}`
@@ -161,6 +170,7 @@ DM or mention → AI chat`
       return message.reply(text);
     }
 
+    // ================= LOOKUP SELECT =================
     if (client.temp?.[message.author.id] && /^\d+$/.test(message.content)) {
       const i = parseInt(message.content);
 
@@ -176,11 +186,28 @@ DM or mention → AI chat`
         `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${movie.imdbID}&plot=full`
       );
 
+      const d = full.data;
+
       delete client.temp[message.author.id];
 
-      return message.reply(`${full.data.Title}\n${full.data.Plot}`);
+      return message.reply(
+`Title: ${d.Title}
+Year: ${d.Year}
+Rated: ${d.Rated}
+Runtime: ${d.Runtime}
+
+Director: ${d.Director}
+Cast: ${d.Actors}
+
+IMDb Rating: ${d.imdbRating}
+
+Plot: ${d.Plot}
+
+IMDb: https://www.imdb.com/title/${d.imdbID}/`
+      );
     }
 
+    // ================= START MOTW =================
     if (message.content.startsWith("/startmotw")) {
       const arg = message.content.split(" ")[1];
 
@@ -206,23 +233,26 @@ DM or mention → AI chat`
       return message.reply("MOTW started.");
     }
 
+    // ================= ENTER MOTW =================
     if (message.content.startsWith("/entermotw")) {
-      const input = message.content.replace("/entermotw", "").replace(/"/g, "");
+      const input = message.content.replace("/entermotw", "").trim();
       const movies = input.split(",").map(m => m.trim());
 
       const uid = message.author.id;
+
       if (!state.submissions[uid]) state.submissions[uid] = [];
 
-      if (state.submissions[uid].length + movies.length > 2)
-        return message.reply("Max 2 movies.");
+      if (state.submissions[uid].length + movies.length > 2) {
+        return message.reply("Max 2 movies allowed.");
+      }
 
       state.submissions[uid].push(...movies);
-      saveState();
 
+      saveState();
       return message.reply("Saved.");
     }
 
-    // ================= AI LAST =================
+    // ================= AI CHAT =================
     if (isDM || isMention) {
       const prompt = isMention
         ? message.content.replace(`<@${client.user.id}>`, "").trim()
@@ -235,7 +265,7 @@ DM or mention → AI chat`
         messages: [
           {
             role: "system",
-            content: "You are Camelbot, a helpful assistant."
+            content: "You are Camelbot, a helpful assistant in a movie Discord server."
           },
           {
             role: "user",
