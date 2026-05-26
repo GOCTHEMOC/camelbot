@@ -1,3 +1,4 @@
 node_modules
-.env
 camelbot.db
+.env
+motwState.json
