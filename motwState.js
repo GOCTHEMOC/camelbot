@@ -1,6 +1,8 @@
 {
   "active": false,
-  "submissionOpened": false,
+  "phase": "inactive",
+  "weekIndex": 0,
+  "phaseEndsAt": null,
   "submissions": {},
-  "startTimestamp": null
+  "votes": {}
 }
