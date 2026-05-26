@@ -44,6 +44,19 @@ async function safeSend(channel, content) {
   }
 }
 
+// ================= OMDB TOP 6 =================
+async function getTop6Movies(query) {
+  const searchRes = await axios.get(
+    `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${encodeURIComponent(query)}`
+  );
+
+  if (!searchRes.data || searchRes.data.Response === "False") {
+    return [];
+  }
+
+  return searchRes.data.Search.slice(0, 6);
+}
+
 // ================= READY =================
 client.once(Events.ClientReady, async () => {
   console.log(`Camelbot online as ${client.user.tag}`);
@@ -52,7 +65,17 @@ client.once(Events.ClientReady, async () => {
     const channel = await client.channels.fetch(process.env.COMMAND_CHANNEL_ID);
 
     if (channel) {
-      channel.send("Camelbot is up.");
+      const timestamp = new Date().toLocaleString("en-US", {
+        timeZone: "America/Los_Angeles",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+
+      await channel.send(`Camelbot is up.\nStartup time (PST): ${timestamp}`);
     }
   } catch (err) {
     console.log("Startup message failed:", err);
@@ -143,8 +166,127 @@ client.on(Events.MessageCreate, async (message) => {
       }
     }
 
-    // ================= ENTER MOTW =================
-    if (content.startsWith("/entermotw")) {
+    // ================= LOOKUP (TOP 6) =================
+    if (content.startsWith("/lookup")) {
+
+      const query = content.replace("/lookup", "").trim();
+      if (!query) return message.channel.send("Provide a movie name.");
+
+      const results = await getTop6Movies(query);
+
+      if (!results.length) {
+        return message.channel.send("No results found.");
+      }
+
+      let output = `Top 6 results for "${query}":\n\n`;
+
+      for (const m of results) {
+
+        const details = await axios.get(
+          `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${m.imdbID}&plot=short`
+        );
+
+        const d = details.data;
+
+        output +=
+`${d.Title} (${d.Year})
+Director: ${d.Director || "N/A"}
+Cast: ${d.Actors || "N/A"}
+IMDB: https://www.imdb.com/title/${d.imdbID}/
+
+`;
+      }
+
+      return message.channel.send(output);
+    }
+
+    // ================= ENTER MOTW (WIZARD) =================
+    const session = client.entermotwSessions[uid];
+
+    if (session) {
+
+      // STEP 1
+      if (session.step === 1) {
+
+        const results = await getTop6Movies(content);
+
+        if (!results.length) {
+          return message.channel.send("No matches found. Try again:");
+        }
+
+        const movie = results[0];
+
+        session.movies.push({
+          title: movie.Title,
+          imdb: movie.imdbID
+        });
+
+        session.step = 2;
+
+        return message.channel.send(
+`Movie 1 selected:
+${movie.Title} (${movie.Year})
+
+Now enter Movie 2:`
+        );
+      }
+
+      // STEP 2
+      if (session.step === 2) {
+
+        const results = await getTop6Movies(content);
+
+        if (!results.length) {
+          return message.channel.send("No matches found. Try again:");
+        }
+
+        const movie = results[0];
+
+        session.movies.push({
+          title: movie.Title,
+          imdb: movie.imdbID
+        });
+
+        session.step = 3;
+
+        return message.channel.send(
+`Movie 2 selected:
+${movie.Title} (${movie.Year})
+
+Reply "yes" to submit or "no" to cancel.`
+        );
+      }
+
+      // CONFIRM
+      if (session.step === 3) {
+
+        if (content.toLowerCase() === "no") {
+          delete client.entermotwSessions[uid];
+          return message.channel.send("Cancelled.");
+        }
+
+        if (content.toLowerCase() !== "yes") {
+          return message.channel.send('Reply "yes" or "no".');
+        }
+
+        if (!state.submissions[uid]) state.submissions[uid] = [];
+
+        session.movies.forEach(m => {
+          if (state.submissions[uid].length < 2) {
+            state.submissions[uid].push(m);
+          }
+        });
+
+        saveState();
+
+        delete client.entermotwSessions[uid];
+
+        return message.channel.send("Movies submitted successfully.");
+      }
+    }
+
+    // START WIZARD
+    if (content === "/entermotw") {
 
       if (!state.active) {
         return message.channel.send("No active MOTW.");
@@ -154,47 +296,17 @@ client.on(Events.MessageCreate, async (message) => {
         return message.channel.send("Submissions are closed.");
       }
 
-      const input = content.replace("/entermotw", "").trim();
-      if (!input) return message.channel.send("Provide movies.");
-
-      const movies = input.split(",").map(x => x.trim()).filter(Boolean);
-
-      if (!state.submissions[uid]) state.submissions[uid] = [];
-
-      if (state.submissions[uid].length >= 2) {
-        return message.channel.send("Max 2 movies.");
-      }
-
       client.entermotwSessions[uid] = {
-        queue: movies,
-        collected: []
+        step: 1,
+        movies: []
       };
 
-      return message.channel.send("Entry received.");
-    }
-
-    // ================= LOOKUP =================
-    if (content.startsWith("/lookup")) {
-      const query = content.replace("/lookup", "").trim();
-
-      const res = await axios.get(
-        `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&t=${encodeURIComponent(query)}&plot=full`
-      );
-
-      if (!res.data || res.data.Response === "False") {
-        return message.channel.send("Not found.");
-      }
-
-      return message.channel.send(
-`${res.data.Title} (${res.data.Year})
-Director: ${res.data.Director}
-Cast: ${res.data.Actors}
-IMDB: https://www.imdb.com/title/${res.data.imdbID}/`
-      );
+      return message.channel.send("Enter Movie 1:");
     }
 
     // ================= AI =================
     if (message.mentions.users.has(client.user.id)) {
+
       const prompt = content.replace(`<@${client.user.id}>`, "").trim();
 
       const res = await openai.chat.completions.create({
