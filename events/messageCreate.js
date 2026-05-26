@@ -94,14 +94,16 @@ if (content === "/camelhelp") {
 }
   // =========================
   // 🏆 START MOTW
+  const commandChannelId = process.env.COMMAND_CHANNEL_ID;
   // =========================
   if (content === "/startmotw") {
 
-    if (message.channel.name !== "camel-commands") {
-      return message.reply("❌ Use #camelcommands");
+    if (message.channel.id !== commandChannelId) {
+      return message.reply("❌ Use the command channel.");
     }
 
     const motw = require("../motwEngine");
+
     motw.startSubmission(client);
 
     return message.reply("🎬 MOTW started.");
@@ -112,7 +114,7 @@ if (content === "/camelhelp") {
   // =========================
   if (content === "/stopmotw") {
 
-    if (message.channel.name !== "camelcommands") {
+    if (message.channel.id !== commandChannelId) {
       return message.reply("❌ Use #camelcommands");
     }
 
