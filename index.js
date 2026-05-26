@@ -9,6 +9,7 @@ const {
 
 const axios = require("axios");
 const fs = require("fs");
+const db = require("./database");
 
 // ================= STATE =================
 let state;
@@ -17,9 +18,9 @@ try {
 } catch {
   state = {
     active: false,
-    startTimestamp: null,
+    submissionOpened: false,
     submissions: {},
-    submissionOpened: false
+    startTimestamp: null
   };
 }
 
@@ -27,36 +28,20 @@ function saveState() {
   fs.writeFileSync("./motwState.json", JSON.stringify(state, null, 2));
 }
 
-// ================= MOTW FSM =================
-const MOTW_STATE = {
-  SEARCH_1: "SEARCH_1",
-  PICK_1: "PICK_1",
-  SEARCH_2: "SEARCH_2",
-  PICK_2: "PICK_2",
-  CONFIRM: "CONFIRM"
-};
-
 // ================= CLIENT =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildMessageReactions
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel, Partials.Message, Partials.Reaction]
 });
 
 client.sessions = new Map();
-
-// cleanup stale sessions (10 min)
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, s] of client.sessions.entries()) {
-    if (now - s.createdAt > 10 * 60 * 1000) {
-      client.sessions.delete(id);
-    }
-  }
-}, 60 * 1000);
 
 // ================= OMDB =================
 async function searchMovies(query) {
@@ -64,9 +49,7 @@ async function searchMovies(query) {
     const res = await axios.get(
       `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&s=${encodeURIComponent(query)}`
     );
-
-    if (!res.data?.Search) return [];
-    return res.data.Search.slice(0, 6);
+    return res.data?.Search?.slice(0, 6) || [];
   } catch {
     return [];
   }
@@ -77,285 +60,258 @@ async function getMovie(id) {
     const res = await axios.get(
       `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${id}&plot=short`
     );
-
-    return res.data || null;
+    return res.data;
   } catch {
     return null;
   }
 }
 
 // ================= READY =================
-client.once(Events.ClientReady, async () => {
+client.once("ready", async () => {
   console.log(`Camelbot online as ${client.user.tag}`);
 
-  try {
-    const ch = await client.channels.fetch(process.env.COMMAND_CHANNEL_ID);
-    if (ch) ch.send("Camelbot is up.");
-  } catch {}
+  const guild = client.guilds.cache.first();
+  if (!guild) return;
+
+  const channel = guild.channels.cache.find(c => c.name === "verify");
+  if (!channel) return;
+
+  const msg = await channel.send(
+    `👋 Welcome!\n\n` +
+    `👍 React = Verified role\n` +
+    `🎬 React = Submit Letterboxd\n\n` +
+    `Then send your link in DMs.`
+  );
+
+  await msg.react("👍");
+  await msg.react("🎬");
+
+  client.verifyMessageId = msg.id;
 });
 
-// ================= MESSAGE HANDLER =================
+// ================= COMMANDS =================
 client.on(Events.MessageCreate, async (message) => {
-  try {
-    if (message.author.bot) return;
+  if (message.author.bot) return;
 
-    const uid = message.author.id;
-    const content = message.content.trim();
-    const session = client.sessions.get(uid);
+  const uid = message.author.id;
+  const content = message.content.trim();
+  const session = client.sessions.get(uid);
 
-    // =====================================================
-    // NO SESSION COMMANDS
-    // =====================================================
-    if (!session) {
+  // ================= GLOBAL COMMANDS =================
 
-      if (content === "/camelhelp") {
-        return message.reply("/lookup, /entermotw, /startmotw, /stopmotw, /viewmotw");
-      }
+  if (content === "/startmotw") {
+    state.active = true;
+    state.submissionOpened = true;
+    state.submissions = {};
+    state.startTimestamp = Date.now();
+    saveState();
 
-      if (content === "/startmotw") {
-        state.active = true;
-        state.submissionOpened = true;
-        state.submissions = {};
-        state.startTimestamp = Date.now();
-        saveState();
-        return message.reply("MOTW started.");
-      }
+    const ch = message.guild?.channels.cache.find(c => c.name === "general");
+    if (ch) ch.send("🏆 MOTW has started!");
 
-      if (content === "/stopmotw") {
-        state.active = false;
-        state.submissionOpened = false;
-        saveState();
-        return message.reply("MOTW stopped.");
-      }
+    return message.reply("MOTW started.");
+  }
 
-      // ================= VIEW MOTW =================
-      if (content === "/viewmotw") {
+  if (content === "/stopmotw") {
+    state.active = false;
+    state.submissionOpened = false;
+    saveState();
+    return message.reply("MOTW stopped.");
+  }
 
-        const subs = state.submissions;
+  if (content === "/viewmotw") {
+    const subs = state.submissions || {};
+    if (!Object.keys(subs).length) return message.reply("No submissions.");
 
-        if (!subs || Object.keys(subs).length === 0) {
-          return message.reply("No MOTW submissions yet.");
-        }
+    let out = "🏆 MOTW:\n\n";
 
-        let output = "🏆 MOTW Submissions:\n\n";
+    for (const [id, movies] of Object.entries(subs)) {
+      out += `<@${id}>:\n`;
 
-        for (const [userId, movies] of Object.entries(subs)) {
+      if (movies?.[0]) out += `1. ${movies[0].title}\n`;
+      if (movies?.[1]) out += `2. ${movies[1].title}\n`;
 
-          output += `<@${userId}>:\n`;
-
-          if (!Array.isArray(movies) || movies.length === 0) {
-            output += `No movies submitted\n\n`;
-            continue;
-          }
-
-          if (movies[0]) {
-            output += `1. ${movies[0].title} https://www.imdb.com/title/${movies[0].imdb}/\n`;
-          }
-
-          if (movies[1]) {
-            output += `2. ${movies[1].title} https://www.imdb.com/title/${movies[1].imdb}/\n`;
-          }
-
-          output += "\n";
-        }
-
-        return message.reply(output);
-      }
-
-      // ================= LOOKUP START =================
-      if (content.startsWith("/lookup")) {
-        const query = content.replace("/lookup", "").trim();
-        if (!query) return message.reply("Provide a movie name.");
-
-        const results = await searchMovies(query);
-        if (!results.length) return message.reply("No results.");
-
-        client.sessions.set(uid, {
-          type: "lookup",
-          results,
-          createdAt: Date.now()
-        });
-
-        let msg = "Pick 0–6:\n0: Cancel\n";
-        results.forEach((m, i) => {
-          msg += `${i + 1}: ${m.Title} (${m.Year})\n`;
-        });
-
-        return message.reply(msg);
-      }
-
-      // ================= ENTER MOTW =================
-      if (content === "/entermotw") {
-
-        if (!state.active) return message.reply("No active MOTW.");
-        if (!state.submissionOpened) return message.reply("Closed.");
-
-        client.sessions.set(uid, {
-          type: "motw",
-          state: MOTW_STATE.SEARCH_1,
-          selected: [],
-          results: null,
-          createdAt: Date.now()
-        });
-
-        return message.reply("Enter Movie 1 search:");
-      }
-
-      return;
+      out += "\n";
     }
 
-    // =====================================================
-    // LOOKUP FLOW
-    // =====================================================
-    if (session.type === "lookup") {
+    return message.reply(out);
+  }
 
-      const choice = parseInt(content);
+  if (content.startsWith("/lookup")) {
+    const query = content.replace("/lookup", "").trim();
+    if (!query) return message.reply("Provide a movie name.");
 
-      if (isNaN(choice) || choice < 0 || choice > session.results.length) {
-        return message.reply("Invalid selection.");
-      }
+    const results = await searchMovies(query);
+    if (!results.length) return message.reply("No results.");
 
-      if (choice === 0) {
-        client.sessions.delete(uid);
-        return message.reply("Cancelled.");
-      }
+    client.sessions.set(uid, {
+      type: "lookup",
+      results
+    });
 
-      const movie = session.results[choice - 1];
-      const details = await getMovie(movie.imdbID);
+    let msg = "Pick:\n0 Cancel\n";
+    results.forEach((m, i) => {
+      msg += `${i + 1}: ${m.Title}\n`;
+    });
 
+    return message.reply(msg);
+  }
+
+  if (content === "/entermotw") {
+    if (!state.active) return message.reply("MOTW not active.");
+
+    client.sessions.set(uid, {
+      type: "motw",
+      step: 1,
+      results: null,
+      selected: []
+    });
+
+    return message.reply("Enter Movie 1 search:");
+  }
+
+  if (!session) return;
+
+  // ================= LOOKUP FLOW =================
+  if (session.type === "lookup") {
+    const choice = parseInt(content);
+
+    if (choice === 0) {
+      client.sessions.delete(uid);
+      return message.reply("Cancelled.");
+    }
+
+    const movie = session.results?.[choice - 1];
+    if (!movie) return message.reply("Invalid.");
+
+    const details = await getMovie(movie.imdbID);
+    client.sessions.delete(uid);
+
+    return message.reply(`${details.Title} (${details.Year})`);
+  }
+
+  // ================= MOTW FLOW =================
+  if (session.type === "motw") {
+
+    const choice = parseInt(content);
+
+    // STEP 1 SEARCH
+    if (session.step === 1 && !session.results) {
+      const results = await searchMovies(content);
+      if (!results.length) return message.reply("No results.");
+
+      session.results = results;
+
+      let msg = "Pick Movie 1:\n0 Cancel\n";
+      results.forEach((m, i) => msg += `${i + 1}: ${m.Title}\n`);
+
+      return message.reply(msg);
+    }
+
+    // PICK 1
+    if (session.step === 1) {
+      if (choice === 0) return client.sessions.delete(uid);
+
+      session.selected.push(session.results[choice - 1]);
+      session.results = null;
+      session.step = 2;
+
+      return message.reply("Enter Movie 2 search:");
+    }
+
+    // STEP 2 SEARCH
+    if (session.step === 2 && !session.results) {
+      const results = await searchMovies(content);
+      if (!results.length) return message.reply("No results.");
+
+      session.results = results;
+
+      let msg = "Pick Movie 2:\n0 Cancel\n";
+      results.forEach((m, i) => msg += `${i + 1}: ${m.Title}\n`);
+
+      return message.reply(msg);
+    }
+
+    // PICK 2 + CONFIRM
+    if (session.step === 2) {
+      if (choice === 0) return client.sessions.delete(uid);
+
+      session.selected.push(session.results[choice - 1]);
+
+      state.submissions[uid] = session.selected.map(m => ({
+        title: m.Title,
+        imdb: m.imdbID
+      }));
+
+      saveState();
       client.sessions.delete(uid);
 
-      if (!details) return message.reply("Failed to fetch movie.");
+      return message.reply("Submitted.");
+    }
+  }
+});
 
-      return message.reply(
-`${details.Title} (${details.Year})
-Director: ${details.Director}
-Cast: ${details.Actors}
-IMDB: https://www.imdb.com/title/${details.imdbID}/`
-      );
+// ================= REACTIONS (VERIFY SYSTEM) =================
+client.on("messageReactionAdd", async (reaction, user) => {
+  if (user.bot) return;
+
+  try {
+    if (reaction.partial) await reaction.fetch();
+
+    if (reaction.message.id !== client.verifyMessageId) return;
+
+    const guild = reaction.message.guild;
+    const member = await guild.members.fetch(user.id);
+
+    // 👍 VERIFY ROLE
+    if (reaction.emoji.name === "👍") {
+      const role = guild.roles.cache.find(r => r.name === "Letterboxd");
+      if (role) await member.roles.add(role);
+
+      await user.send("Send your Letterboxd link in DM.");
     }
 
-    // =====================================================
-    // MOTW FLOW (FSM)
-    // =====================================================
-    if (session.type === "motw") {
-
-      const choice = parseInt(content);
-
-      // ---------------- SEARCH 1 ----------------
-      if (session.state === MOTW_STATE.SEARCH_1) {
-
-        const results = await searchMovies(content);
-        if (!results.length) return message.reply("No results. Try again:");
-
-        session.results = results;
-        session.state = MOTW_STATE.PICK_1;
-
-        let msg = "Pick Movie 1:\n0: Cancel\n";
-        results.forEach((m, i) => {
-          msg += `${i + 1}: ${m.Title} (${m.Year})\n`;
-        });
-
-        return message.reply(msg);
-      }
-
-      // ---------------- PICK 1 ----------------
-      if (session.state === MOTW_STATE.PICK_1) {
-
-        if (isNaN(choice) || choice < 0 || choice > session.results.length) {
-          return message.reply("Invalid selection.");
-        }
-
-        if (choice === 0) {
-          client.sessions.delete(uid);
-          return message.reply("Cancelled.");
-        }
-
-        session.selected.push(session.results[choice - 1]);
-        session.results = null;
-        session.state = MOTW_STATE.SEARCH_2;
-
-        return message.reply("Enter Movie 2 search:");
-      }
-
-      // ---------------- SEARCH 2 ----------------
-      if (session.state === MOTW_STATE.SEARCH_2) {
-
-        const results = await searchMovies(content);
-        if (!results.length) return message.reply("No results. Try again:");
-
-        session.results = results;
-        session.state = MOTW_STATE.PICK_2;
-
-        let msg = "Pick Movie 2:\n0: Cancel\n";
-        results.forEach((m, i) => {
-          msg += `${i + 1}: ${m.Title} (${m.Year})\n`;
-        });
-
-        return message.reply(msg);
-      }
-
-      // ---------------- PICK 2 ----------------
-      if (session.state === MOTW_STATE.PICK_2) {
-
-        if (isNaN(choice) || choice < 0 || choice > session.results.length) {
-          return message.reply("Invalid selection.");
-        }
-
-        if (choice === 0) {
-          client.sessions.delete(uid);
-          return message.reply("Cancelled.");
-        }
-
-        session.selected.push(session.results[choice - 1]);
-        session.results = null;
-        session.state = MOTW_STATE.CONFIRM;
-
-        return message.reply(
-`Confirm:
-1. ${session.selected[0].Title}
-2. ${session.selected[1].Title}
-
-Reply YES or NO`
-        );
-      }
-
-      // ---------------- CONFIRM ----------------
-      if (session.state === MOTW_STATE.CONFIRM) {
-
-        const lower = content.toLowerCase();
-
-        if (lower === "no") {
-          client.sessions.delete(uid);
-          return message.reply("Cancelled.");
-        }
-
-        if (lower !== "yes") {
-          return message.reply("Reply YES or NO.");
-        }
-
-        state.submissions ??= {};
-        if (!state.submissions[uid]) state.submissions[uid] = [];
-
-        for (const m of session.selected) {
-          if (state.submissions[uid].length < 2) {
-            state.submissions[uid].push({
-              title: m.Title,
-              imdb: m.imdbID
-            });
-          }
-        }
-
-        saveState();
-        client.sessions.delete(uid);
-
-        return message.reply("Movies submitted successfully.");
-      }
+    // 🎬 PROMPT + DB LINK FLOW
+    if (reaction.emoji.name === "🎬") {
+      await user.send("Send Letterboxd link:");
     }
 
   } catch (err) {
-    console.log("Error:", err);
+    console.log(err);
   }
+});
+
+// ================= DM LETTERBOXD SAVE =================
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+  if (message.guild) return;
+
+  const url = message.content.trim();
+  const regex = /^https:\/\/letterboxd\.com\/[A-Za-z0-9_-]+\/$/;
+
+  if (!regex.test(url)) {
+    return message.reply("Invalid Letterboxd URL.");
+  }
+
+  const exists = db.prepare(
+    "SELECT * FROM users WHERE letterboxd = ?"
+  ).get(url);
+
+  if (exists) {
+    return message.reply("Already linked.");
+  }
+
+  db.prepare(
+    "INSERT INTO users (discord_id, letterboxd) VALUES (?, ?)"
+  ).run(message.author.id, url);
+
+  const guild = client.guilds.cache.first();
+  const member = await guild.members.fetch(message.author.id);
+
+  const role = guild.roles.cache.find(r => r.name === "Letterboxd");
+  if (role) await member.roles.add(role);
+
+  return message.reply("Verified Letterboxd!");
 });
 
 client.login(process.env.TOKEN);
