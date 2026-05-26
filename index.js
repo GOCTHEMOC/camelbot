@@ -69,10 +69,11 @@ client.once("ready", async () => {
   if (!alreadySent) {
 
     const msg = await verifyChannel.send(
-`✅ React below:
+`Hello! Welcome to Gohith's movie server.
 
-👍 = Verified
-🎬 = Link Letterboxd`
+To verify yourself, please react with a 👍 emoji.
+
+React 🎬 if you want to link your Letterboxd account.`
     );
 
     await msg.react("👍");
