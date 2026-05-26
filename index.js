@@ -28,7 +28,6 @@ const client = new Client({
 client.sessions = new Map();
 client.pendingLookups = pendingLookups;
 
-// attach event handlers
 require("./events/messageCreate")(client);
 require("./events/reactionAdd")(client);
 require("./events/guildMemberAdd")(client);
@@ -44,8 +43,19 @@ client.once("ready", async () => {
   const guild = client.guilds.cache.first();
   if (!guild) return;
 
-  const verifyChannel =
-    guild.channels.cache.find(c => c.name === "verify");
+  // ✅ FIXED: COMMAND CHANNEL BY ID
+  const commandChannel = await client.channels.fetch(
+    process.env.COMMAND_CHANNEL_ID
+  ).catch(() => null);
+
+  if (commandChannel) {
+    commandChannel.send("🟢 Camelbot is ONLINE and operational.");
+  }
+
+  // VERIFY SYSTEM (UNCHANGED BUT SAFE)
+  const verifyChannel = await client.channels.fetch(
+    process.env.VERIFY_CHANNEL_ID
+  ).catch(() => null);
 
   if (!verifyChannel) return;
 
@@ -56,7 +66,6 @@ client.once("ready", async () => {
     m.content.includes("React below")
   );
 
-  // send verification message ONLY once ever per restart cycle
   if (!alreadySent) {
 
     const msg = await verifyChannel.send(
@@ -70,7 +79,6 @@ client.once("ready", async () => {
     await msg.react("🎬");
 
     client.verifyMessageId = msg.id;
-
   } else {
     client.verifyMessageId = alreadySent.id;
   }
