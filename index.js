@@ -35,42 +35,64 @@ const client = new Client({
 let verifyMessageId = null;
 
 client.once(Events.ClientReady, async () => {
-  console.log(`Camelbot online: ${client.user.tag}`);
+  console.log(`Camelbot online as ${client.user.tag}`);
 
-  const channel = await client.channels.fetch(process.env.VERIFY_CHANNEL_ID);
+  try {
+    const channel = await client.channels.fetch(process.env.VERIFY_CHANNEL_ID);
 
-  const msg = await channel.send(
+    const msg = await channel.send(
 `Hello! Welcome to Gohith's movie server.
 
 React 👍 to verify.
 React 🎬 to link Letterboxd.`
-  );
+    );
 
-  verifyMessageId = msg.id;
+    verifyMessageId = msg.id;
+    console.log("Verify message sent:", msg.id);
+
+  } catch (err) {
+    console.log("Verify error:", err);
+  }
 });
 
-// ================= REACTIONS =================
+// ================= REACTION HANDLER =================
 client.on("messageReactionAdd", async (reaction, user) => {
   if (user.bot) return;
 
-  if (reaction.message.id !== verifyMessageId) return;
+  try {
+    if (!reaction.message || reaction.message.id !== verifyMessageId) return;
 
-  const guild = reaction.message.guild;
-  const member = await guild.members.fetch(user.id);
+    const guild = reaction.message.guild;
+    const member = await guild.members.fetch(user.id);
 
-  if (reaction.emoji.name === "👍") {
-    const role = guild.roles.cache.find(r => r.name === "verified");
-    if (role) await member.roles.add(role);
-  }
+    if (reaction.emoji.name === "👍") {
+      const role = guild.roles.cache.find(r => r.name === "verified");
+      if (role) await member.roles.add(role);
+    }
 
-  if (reaction.emoji.name === "🎬") {
-    user.send("Send your Letterboxd link:");
+    if (reaction.emoji.name === "🎬") {
+      user.send("Send your Letterboxd link:");
+    }
+
+  } catch (err) {
+    console.log("Reaction error:", err);
   }
 });
 
 // ================= MESSAGE HANDLER =================
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+
+  // 🔒 COMMAND CHANNEL LOCK
+  const allowedChannel = process.env.COMMAND_CHANNEL_ID;
+
+  if (
+    message.guild &&
+    message.content.startsWith("/") &&
+    message.channel.id !== allowedChannel
+  ) return;
+
+  if (!message.guild) return;
 
   try {
 
@@ -89,7 +111,7 @@ client.on(Events.MessageCreate, async (message) => {
         await channel.send(`<@${message.author.id}> linked: ${link}`);
       }
 
-      return message.reply("Saved.");
+      return message.reply("Saved Letterboxd.");
     }
 
     // ================= START MOTW =================
@@ -99,14 +121,14 @@ client.on(Events.MessageCreate, async (message) => {
       if (arg === "0/00/0000") {
         state.active = false;
         saveState();
-        return message.reply("MOTW stopped.");
+        return message.reply("❌ MOTW stopped.");
       }
 
       state.active = true;
       state.startDate = new Date(arg).toISOString().split("T")[0];
 
       saveState();
-      return message.reply(`MOTW started: ${state.startDate}`);
+      return message.reply(`🎬 MOTW started: ${state.startDate}`);
     }
 
     // ================= ENTER MOTW =================
@@ -116,20 +138,20 @@ client.on(Events.MessageCreate, async (message) => {
       const input = message.content.replace("/entermotw", "").trim();
       const movies = input.split(",").map(m => m.replace(/"/g, "").trim());
 
-      if (movies.length > 2) return message.reply("Max 2 movies.");
+      if (movies.length > 2)
+        return message.reply("❌ Max 2 movies per week.");
 
       const uid = message.author.id;
 
       if (!state.submissions[uid]) state.submissions[uid] = [];
 
-      if (state.submissions[uid].length + movies.length > 2) {
-        return message.reply("Max 2 per week.");
-      }
+      if (state.submissions[uid].length + movies.length > 2)
+        return message.reply("❌ Max 2 movies total.");
 
       state.submissions[uid].push(...movies);
       saveState();
 
-      return message.reply("Movies added.");
+      return message.reply("✅ Movies submitted.");
     }
 
     // ================= LOOKUP =================
@@ -144,12 +166,12 @@ client.on(Events.MessageCreate, async (message) => {
 
       if (!movies.length) return message.reply("No results.");
 
-      let text = "Are you asking for:\n\n";
+      let text = "🎬 Are you looking for:\n\n";
       movies.forEach((m, i) => {
         text += `${i + 1}. ${m.Title} (${m.Year})\n`;
       });
 
-      text += "\nReply 1–6 or 0.";
+      text += "\nReply 1–6 or 0 to cancel.";
 
       message.reply(text);
 
@@ -189,12 +211,11 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
   } catch (err) {
-    console.log("Error:", err);
+    console.log("Handler error:", err);
   }
 });
 
 // ================= MOTW ENGINE =================
-
 setInterval(async () => {
   if (!state.active || !state.startDate) return;
 
@@ -208,7 +229,7 @@ setInterval(async () => {
 
   try {
 
-    // DAY 0 - OPEN
+    // DAY 0
     if (cycleDay === 0 && !state.submissionOpened) {
       state.submissions = {};
       state.pollPosted = false;
@@ -219,7 +240,7 @@ setInterval(async () => {
       saveState();
     }
 
-    // DAY 3 - POLL
+    // DAY 3
     if (cycleDay === 3 && !state.pollPosted) {
       const all = Object.values(state.submissions).flat();
 
@@ -235,7 +256,7 @@ all.map((m, i) => `${i + 1}️⃣ ${m}`).join("\n")
       saveState();
     }
 
-    // DAY 4 - WINNER
+    // DAY 4
     if (cycleDay === 4 && state.pollPosted && !state.winnerPosted) {
       const poll = await channel.messages.fetch(state.pollMessageId);
 
@@ -262,6 +283,7 @@ all.map((m, i) => `${i + 1}️⃣ ${m}`).join("\n")
       state.winnerPosted = false;
       state.submissions = {};
       state.pollMessageId = null;
+
       saveState();
     }
 
