@@ -3,154 +3,119 @@ const fs = require("fs");
 const STATE_FILE = "./motwState.json";
 
 let running = false;
+let loopStarted = false;
 
 // =========================
-// SINGLE SOURCE OF TRUTH
+// SAFE STATE ACCESS (NO CACHE BUGS)
 // =========================
-let state = JSON.parse(fs.readFileSync(STATE_FILE));
-
-// =========================
-// SAVE ONLY WHEN MODIFIED
-// =========================
-function saveState() {
-  fs.writeFileSync(
-    STATE_FILE,
-    JSON.stringify(state, null, 2)
-  );
+function getState() {
+  try {
+    return JSON.parse(fs.readFileSync(STATE_FILE));
+  } catch {
+    return {
+      phase: "submission",
+      submissions: {},
+      poll: []
+    };
+  }
 }
 
-// =========================
-// PUBLIC STATE ACCESS
-// =========================
-function loadState() {
-  return state;
+function saveState(state) {
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-// =========================
-// UTIL
-// =========================
 function wait(ms) {
   return new Promise(res => setTimeout(res, ms));
 }
 
 // =========================
-// SUBMISSION PHASE (4 DAYS)
+// PHASES
 // =========================
 async function startSubmission(client) {
+  const state = getState();
 
   state.phase = "submission";
   state.submissions = {};
   state.poll = [];
 
-  saveState();
+  saveState(state);
 
-  const movieChannel = await client.channels.fetch(
-    process.env.MOVIE_CHANNEL_ID
-  );
+  const ch = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID).catch(() => null);
 
-  if (movieChannel) {
-    await movieChannel.send(
-`🎬 MOVIE OF THE WEEK STARTED
-
-Submissions are OPEN for 4 days.
-
-Use:
-/entermotw`
-    );
+  if (ch) {
+    ch.send(`🎬 MOVIE OF THE WEEK STARTED\n\nSubmissions OPEN for 4 days.\nUse /entermotw`);
   }
 }
 
-// =========================
-// POLLING PHASE (2 DAYS)
-// =========================
 async function startPolling(client) {
+  const state = getState();
 
   state.phase = "polling";
 
   let movies = [];
-
-  Object.values(state.submissions).forEach(arr => {
-    movies.push(...arr);
-  });
+  Object.values(state.submissions).forEach(arr => movies.push(...arr));
 
   state.poll = [...new Set(movies)];
 
-  saveState();
+  saveState(state);
 
-  const movieChannel = await client.channels.fetch(
-    process.env.MOVIE_CHANNEL_ID
-  );
+  const ch = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID).catch(() => null);
 
-  if (movieChannel) {
-
-    let msg = `🗳️ POLLING HAS BEGUN\n\nVote by replying with a number.\n\n`;
+  if (ch) {
+    let msg = `🗳️ POLLING STARTED\n\n`;
 
     state.poll.forEach((m, i) => {
       msg += `${i + 1}. ${m}\n`;
     });
 
-    await movieChannel.send(msg);
+    ch.send(msg);
   }
 }
 
-// =========================
-// WINNER PHASE
-// =========================
 async function endPolling(client) {
-
-  const movieChannel = await client.channels.fetch(
-    process.env.MOVIE_CHANNEL_ID
-  );
-
-  const pool = state.poll;
+  const state = getState();
 
   const winner =
-    pool.length > 0
-      ? pool[Math.floor(Math.random() * pool.length)]
+    state.poll.length > 0
+      ? state.poll[Math.floor(Math.random() * state.poll.length)]
       : "No submissions";
 
-  await movieChannel.send(
-`🏆 MOVIE OF THE WEEK WINNER
+  const ch = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID).catch(() => null);
 
-🎬 ${winner}`
-  );
+  if (ch) {
+    ch.send(`🏆 WINNER\n\n🎬 ${winner}`);
+  }
 
   state.phase = "rest";
-  saveState();
+  saveState(state);
 }
 
-// =========================
-// REST DAY (1 DAY)
-// =========================
 async function restDay(client) {
+  const state = getState();
 
-  const movieChannel = await client.channels.fetch(
-    process.env.MOVIE_CHANNEL_ID
-  );
+  const ch = await client.channels.fetch(process.env.MOVIE_CHANNEL_ID).catch(() => null);
 
-  await movieChannel.send(
-`🛌 REST DAY
-
-Next MOTW cycle starts tomorrow.`
-  );
+  if (ch) {
+    ch.send(`🛌 REST DAY\n\nNext cycle starts tomorrow.`);
+  }
 
   state.submissions = {};
   state.poll = [];
   state.phase = "submission";
 
-  saveState();
+  saveState(state);
 }
 
 // =========================
-// MAIN LOOP
+// LOOP (FIXED SAFE SINGLETON)
 // =========================
 async function startLoop(client) {
+  if (running || loopStarted) return;
 
-  if (running) return;
   running = true;
+  loopStarted = true;
 
   while (running) {
-
     await startSubmission(client);
     await wait(4 * 24 * 60 * 60 * 1000);
 
@@ -158,7 +123,6 @@ async function startLoop(client) {
     await wait(2 * 24 * 60 * 60 * 1000);
 
     await endPolling(client);
-
     await wait(1 * 24 * 60 * 60 * 1000);
 
     await restDay(client);
@@ -176,6 +140,6 @@ module.exports = {
   endPolling,
   restDay,
   stopMOTW,
-  loadState,
+  getState,
   saveState
 };
