@@ -1,7 +1,5 @@
 require("dotenv").config();
 
-const pendingLookups = {};
-
 const {
   Client,
   GatewayIntentBits,
@@ -17,7 +15,6 @@ const client = new Client({
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.GuildMessageReactions
   ],
-
   partials: [
     Partials.Channel,
     Partials.Message,
@@ -26,7 +23,7 @@ const client = new Client({
 });
 
 client.sessions = new Map();
-client.pendingLookups = pendingLookups;
+client.pendingLookups = {};
 
 require("./events/messageCreate")(client);
 require("./events/reactionAdd")(client);
@@ -40,10 +37,9 @@ client.once("ready", async () => {
 
   motw.startLoop(client);
 
-  const guild = client.guilds.cache.first();
-  if (!guild) return;
-
-  // ✅ FIXED: COMMAND CHANNEL BY ID
+  // =========================
+  // COMMAND CHANNEL ONLINE MSG
+  // =========================
   const commandChannel = await client.channels.fetch(
     process.env.COMMAND_CHANNEL_ID
   ).catch(() => null);
@@ -52,47 +48,38 @@ client.once("ready", async () => {
     commandChannel.send("🟢 Camelbot is ONLINE and operational.");
   }
 
-  // VERIFY SYSTEM (UNCHANGED BUT SAFE)
+  // =========================
+  // VERIFY MESSAGE SYSTEM
+  // =========================
   const verifyChannel = await client.channels.fetch(
     process.env.VERIFY_CHANNEL_ID
   ).catch(() => null);
 
   if (!verifyChannel) return;
 
-  const existing = await verifyChannel.messages.fetch({ limit: 10 });
+  const messages = await verifyChannel.messages.fetch({ limit: 20 });
 
-  const alreadySent = existing.find(m =>
+  const existing = messages.find(m =>
     m.author.id === client.user.id &&
-    m.content.includes("React below")
+    m.content.includes("verify yourself")
   );
 
-  if (!alreadySent) {
+  if (!existing) {
 
-    const verifyChannel = await client.channels.fetch(process.env.VERIFY_CHANNEL_ID);
-
-const messages = await verifyChannel.messages.fetch({ limit: 20 });
-
-const existing = messages.find(m =>
-  m.author.id === client.user.id &&
-  m.content.includes("verify yourself")
-);
-
-if (!existing) {
-
-  const msg = await verifyChannel.send(
+    const msg = await verifyChannel.send(
 `Hello! Welcome to Gohith's movie server. To verify yourself, please react with a 👍 emoji.
 
 React 🎬 if you want to link your Letterboxd account.`
-  );
+    );
 
-  await msg.react("👍");
-  await msg.react("🎬");
+    await msg.react("👍");
+    await msg.react("🎬");
 
-  client.verifyMessageId = msg.id;
+    client.verifyMessageId = msg.id;
 
-} else {
-  client.verifyMessageId = existing.id;
-}
+  } else {
+    client.verifyMessageId = existing.id;
+  }
 });
 
 client.login(process.env.TOKEN);
