@@ -68,22 +68,31 @@ client.once("ready", async () => {
 
   if (!alreadySent) {
 
-    const msg = await verifyChannel.send(
-`Hello! Welcome to Gohith's movie server.
+    const verifyChannel = await client.channels.fetch(process.env.VERIFY_CHANNEL_ID);
 
-To verify yourself, please react with a 👍 emoji.
+const messages = await verifyChannel.messages.fetch({ limit: 20 });
+
+const existing = messages.find(m =>
+  m.author.id === client.user.id &&
+  m.content.includes("verify yourself")
+);
+
+if (!existing) {
+
+  const msg = await verifyChannel.send(
+`Hello! Welcome to Gohith's movie server. To verify yourself, please react with a 👍 emoji.
 
 React 🎬 if you want to link your Letterboxd account.`
-    );
+  );
 
-    await msg.react("👍");
-    await msg.react("🎬");
+  await msg.react("👍");
+  await msg.react("🎬");
 
-    client.verifyMessageId = msg.id;
-  } else {
-    client.verifyMessageId = alreadySent.id;
-  }
+  client.verifyMessageId = msg.id;
 
+} else {
+  client.verifyMessageId = existing.id;
+}
 });
 
 client.login(process.env.TOKEN);
