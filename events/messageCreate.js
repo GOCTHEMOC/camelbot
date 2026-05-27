@@ -1,23 +1,15 @@
 const axios = require("axios");
-
-const {
-  movieSearch
-} = require("../services/lookup");
-
-const {
-  askAI
-} = require("../services/ai");
-
-const {
-  loadState,
-  saveState,
-  stopMOTW
-} = require("../motwEngine");
+const { askAI } = require("../services/ai");
+const { movieSearch } = require("../services/lookup");
+const { loadState, saveState } = require("../motwEngine");
 
 module.exports = (client) => {
 
 client.on("messageCreate", async (message) => {
 
+  // =========================
+  // 1. BASIC SAFETY GUARD
+  // =========================
   if (message.author.bot) return;
 
   const content = message.content.trim();
@@ -25,12 +17,17 @@ client.on("messageCreate", async (message) => {
 
   const state = loadState();
 
+  const session = client.sessions.get(userId);
+  const pending = client.pendingLookups?.[userId];
+
   // =========================
-  // 🤖 AI CHAT (MENTION BOT)
+  // 2. AI MENTION HANDLER (ONLY WHEN PINGED)
   // =========================
   if (message.mentions.has(client.user)) {
 
-    const prompt = content.replace(`<@${client.user.id}>`, "");
+    const prompt = content
+      .replace(`<@${client.user.id}>`, "")
+      .trim();
 
     const response = await askAI(prompt);
 
@@ -38,10 +35,8 @@ client.on("messageCreate", async (message) => {
   }
 
   // =========================
-  // 🎬 LOOKUP FOLLOW-UP (FIXED BUG)
+  // 3. LOOKUP FOLLOW-UP INPUT
   // =========================
-  const pending = client.pendingLookups?.[userId];
-
   if (pending && pending.channelId === message.channel.id) {
 
     const num = parseInt(content);
@@ -50,9 +45,7 @@ client.on("messageCreate", async (message) => {
 
       const movie = pending.results[num - 1];
 
-      if (!movie) {
-        return message.reply("❌ Invalid selection.");
-      }
+      if (!movie) return message.reply("❌ Invalid selection.");
 
       delete client.pendingLookups[userId];
 
@@ -71,156 +64,106 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       );
     }
   }
-if (content === "/camelhelp") {
-  return message.reply(
-`🤖 Camelbot Command Directory
 
-🎬 Movie Commands
+  // =========================
+  // 4. COMMAND HANDLER (ALL /COMMANDS)
+  // =========================
+  if (content.startsWith("/")) {
+
+    // HELP
+    if (content === "/camelhelp") {
+      return message.reply(
+`🤖 Camelbot Commands
+
+🎬 Movies
 /lookup <movie>
 /entermotw
 /showmotw
 
-🏆 Admin (camelcommands only)
+🏆 Admin
 /startmotw
 /stopmotw
 
-🔐 Verification
-👍 Verified role
-🎬 Letterboxd DM flow
-
-🤖 AI
-@Camelbot → chat`
-  );
-}
-  // =========================
-  // 🏆 START MOTW
-  const commandChannelId = process.env.COMMAND_CHANNEL_ID;
-  // =========================
-  if (content === "/startmotw") {
-
-    if (message.channel.id !== commandChannelId) {
-      return message.reply("❌ Use the command channel.");
+🤖 AI: @Camelbot`
+      );
     }
 
-    const motw = require("../motwEngine");
+    // LOOKUP
+    if (content.startsWith("/lookup ")) {
 
-    motw.startSubmission(client);
+      const query = content.replace("/lookup ", "").trim();
 
-    return message.reply("🎬 MOTW started.");
-  }
+      if (!query) return message.reply("❌ Provide a movie name.");
 
-  // =========================
-  // 🛑 STOP MOTW
-  // =========================
-  if (content === "/stopmotw") {
+      const results = await movieSearch(query);
 
-    if (message.channel.id !== commandChannelId) {
-      return message.reply("❌ Use #camelcommands");
-    }
+      if (!results.length) return message.reply("❌ No results.");
 
-    stopMOTW();
+      const top = results.slice(0, 6);
 
-    return message.reply("🛑 MOTW stopped.");
-  }
+      let msg = "🎬 Pick a movie (1–6):\n\n";
 
-  // =========================
-  // 📊 SHOW MOTW
-  // =========================
-  if (content === "/showmotw") {
-
-    let output = `🎬 MOTW STATUS\n\nPhase: ${state.phase}\n\n`;
-
-    const subs = state.submissions;
-
-    if (!subs || Object.keys(subs).length === 0) {
-      return message.reply(output + "No submissions yet.");
-    }
-
-    for (const userId in subs) {
-
-      const member = await message.guild.members
-        .fetch(userId)
-        .catch(() => null);
-
-      const name = member ? member.user.username : userId;
-
-      output += `👤 ${name}\n`;
-
-      subs[userId].forEach((movie, i) => {
-        output += `${i + 1}. ${movie}\n`;
+      top.forEach((m, i) => {
+        msg += `${i + 1}. ${m.Title} (${m.Year})\n`;
       });
 
-      output += "\n";
+      client.pendingLookups = client.pendingLookups || {};
+      client.pendingLookups[userId] = {
+        results: top,
+        channelId: message.channel.id
+      };
+
+      return message.reply(msg);
     }
 
-    return message.reply(output);
+    // SHOW MOTW
+    if (content === "/showmotw") {
+
+      let output = "🎬 MOTW SUBMISSIONS\n\n";
+
+      const subs = state.submissions || {};
+
+      if (Object.keys(subs).length === 0) {
+        return message.reply(output + "No submissions yet.");
+      }
+
+      for (const id in subs) {
+        output += `👤 ${id}\n`;
+        subs[id].forEach((m, i) => {
+          output += `${i + 1}. ${m}\n`;
+        });
+        output += "\n";
+      }
+
+      return message.reply(output);
+    }
+
+    // ENTER MOTW
+    if (content === "/entermotw") {
+
+      if (state.phase !== "submission") {
+        return message.reply("❌ Submissions closed.");
+      }
+
+      client.sessions.set(userId, {
+        type: "motw",
+        step: 1,
+        results: [],
+        selected: []
+      });
+
+      return message.reply("🎬 Send your first movie search.");
+    }
+
+    return;
   }
 
   // =========================
-  // 🔎 LOOKUP COMMAND
+  // 5. MOTW SESSION HANDLER
   // =========================
-  if (content.startsWith("/lookup ")) {
-
-    const query = content.replace("/lookup ", "").trim();
-
-    if (!query) {
-      return message.reply("❌ Provide a movie name.");
-    }
-
-    const results = await movieSearch(query);
-
-    if (!results.length) {
-      return message.reply("❌ No results found.");
-    }
-
-    const top = results.slice(0, 6);
-
-    let msg = "🎬 Pick a movie (reply 1–6):\n\n";
-
-    top.forEach((m, i) => {
-      msg += `${i + 1}. ${m.Title} (${m.Year})\n`;
-    });
-
-    client.pendingLookups = client.pendingLookups || {};
-    client.pendingLookups[userId] = {
-      results: top,
-      channelId: message.channel.id
-    };
-
-    return message.reply(msg);
-  }
-
-  // =========================
-  // 🎬 ENTER MOTW
-  // =========================
-  if (content === "/entermotw") {
-
-    if (message.channel.name !== "movie-of-the-week") {
-      return message.reply("❌ Only in #movieoftheweek");
-    }
-
-    if (state.phase !== "submission") {
-      return message.reply("❌ Submissions are closed.");
-    }
-
-    client.sessions.set(userId, {
-      type: "motw",
-      step: 1,
-      results: [],
-      selected: []
-    });
-
-    return message.reply("🎬 Send your first movie search.");
-  }
-
-  // =========================
-  // 🧠 MOTW SESSION HANDLER
-  // =========================
-  const session = client.sessions.get(userId);
-
   if (session?.type === "motw") {
 
-    // STEP: SEARCH PHASE
+    // SEARCH STEP
     if (session.step === 1 || session.step === 2) {
 
       const results = await movieSearch(content);
@@ -230,6 +173,7 @@ if (content === "/camelhelp") {
       }
 
       const top = results.slice(0, 6);
+
       session.results = top;
 
       let msg = `🎬 Pick Movie ${session.step} (1–6):\n\n`;
@@ -243,7 +187,7 @@ if (content === "/camelhelp") {
       return message.reply(msg);
     }
 
-    // STEP: PICK PHASE
+    // PICK STEP
     if (session.step === "pick") {
 
       const num = parseInt(content);
@@ -256,8 +200,7 @@ if (content === "/camelhelp") {
 
       session.selected.push(movie.Title);
 
-      // SECOND MOVIE DONE
-      if (session.selected.length >= 2) {
+      if (session.selected.length === 2) {
 
         state.submissions[userId] = session.selected;
         saveState(state);
