@@ -117,16 +117,32 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       );
     }
 
+      // =========================
     // START MOTW
+    // =========================
     if (content === "/startmotw") {
-      motw.startLoop(client);
-      return message.reply("🎬 MOTW started.");
+
+      try {
+        motw.startMOTW(client);
+        return message.reply("🎬 MOTW started.");
+      } catch (err) {
+        console.error(err);
+        return message.reply("❌ Failed to start MOTW.");
+      }
     }
 
+    // =========================
     // STOP MOTW
+    // =========================
     if (content === "/stopmotw") {
-      motw.stopMOTW();
-      return message.reply("🛑 MOTW stopped.");
+
+      try {
+        motw.stopMOTW();
+        return message.reply("🛑 MOTW stopped.");
+      } catch (err) {
+        console.error(err);
+        return message.reply("❌ Failed to stop MOTW.");
+      }
     }
 
     // LOOKUP
