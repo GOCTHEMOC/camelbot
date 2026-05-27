@@ -24,17 +24,38 @@ client.on("messageCreate", async (message) => {
   // =========================
   // 1. AI ROUTE (HARD STOP)
   // =========================
-  if (isPing) {
+if (isPing) {
+
+  try {
 
     const prompt = content
       .replace(`<@${client.user.id}>`, "")
       .replace(`<@!${client.user.id}>`, "")
       .trim();
 
+    if (!prompt) {
+      return message.reply("🤖 What do you want to ask?");
+    }
+
     const response = await askAI(prompt);
 
-    return message.reply(response);
+    if (!response) {
+      return message.reply("❌ AI failed to respond.");
+    }
+
+    return message.reply(
+      String(response).slice(0, 1900)
+    );
+
+  } catch (err) {
+
+    console.error("AI ERROR:", err);
+
+    return message.reply(
+      "❌ AI error occurred."
+    );
   }
+}
 
   // =========================
   // 2. LOOKUP FOLLOW-UP
