@@ -1,5 +1,13 @@
 require("dotenv").config();
 
+process.on("unhandledRejection", err => {
+  console.error("UNHANDLED REJECTION:", err);
+});
+
+process.on("uncaughtException", err => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
 const {
   Client,
   GatewayIntentBits,
@@ -35,7 +43,15 @@ client.once("ready", async () => {
 
   console.log(`Logged in as ${client.user.tag}`);
 
-  motw.startLoop(client);
+  // =========================
+  // MOTW LOOP (SINGLE INSTANCE GUARANTEE)
+  // =========================
+  if (global.__MOTW_LOOP_RUNNING__) {
+    console.log("MOTW loop already running (blocked duplicate start)");
+  } else {
+    global.__MOTW_LOOP_RUNNING__ = true;
+    motw.startLoop(client);
+  }
 
   // =========================
   // COMMAND CHANNEL ONLINE MSG
