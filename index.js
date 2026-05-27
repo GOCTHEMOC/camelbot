@@ -33,10 +33,12 @@ const client = new Client({
 client.sessions = new Map();
 client.pendingLookups = {};
 
+// events
 require("./events/messageCreate")(client);
 require("./events/reactionAdd")(client);
 require("./events/guildMemberAdd")(client);
 
+// motw engine (ONLY ONCE)
 const motw = require("./motwEngine");
 
 client.once("ready", async () => {
@@ -44,14 +46,9 @@ client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
   // =========================
-  // MOTW LOOP (SINGLE INSTANCE GUARANTEE)
+  // MOTW SCHEDULER START
   // =========================
-  if (global.__MOTW_LOOP_RUNNING__) {
-    console.log("MOTW loop already running (blocked duplicate start)");
-  } else {
-    global.__MOTW_LOOP_RUNNING__ = true;
-    
-  }
+  motw.startScheduler(client);
 
   // =========================
   // COMMAND CHANNEL ONLINE MSG
