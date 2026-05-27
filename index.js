@@ -50,7 +50,7 @@ client.once("ready", async () => {
     console.log("MOTW loop already running (blocked duplicate start)");
   } else {
     global.__MOTW_LOOP_RUNNING__ = true;
-    motw.startLoop(client);
+    
   }
 
   // =========================
