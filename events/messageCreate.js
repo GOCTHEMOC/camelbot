@@ -7,6 +7,9 @@ module.exports = (client) => {
 
 client.on("messageCreate", async (message) => {
 
+  // =========================
+  // 0. BASIC GUARD
+  // =========================
   if (message.author.bot) return;
 
   const content = message.content.trim();
@@ -15,12 +18,13 @@ client.on("messageCreate", async (message) => {
   const session = client.sessions.get(userId);
   const pending = client.pendingLookups?.[userId];
 
+  const isPing = message.mentions.users.has(client.user.id);
+
   // =========================
-  // AI MENTION HANDLER
+  // 1. AI ROUTE (HARD STOP)
   // =========================
-  if (
-    message.mentions.users.has(client.user.id)
-  ) {
+  if (isPing) {
+
     const prompt = content
       .replace(`<@${client.user.id}>`, "")
       .replace(`<@!${client.user.id}>`, "")
@@ -32,7 +36,7 @@ client.on("messageCreate", async (message) => {
   }
 
   // =========================
-  // LOOKUP FOLLOW-UP
+  // 2. LOOKUP FOLLOW-UP
   // =========================
   if (pending && pending.channelId === message.channel.id) {
 
@@ -80,11 +84,10 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
   }
 
   // =========================
-  // COMMANDS
+  // 3. COMMANDS
   // =========================
   if (content.startsWith("/")) {
 
-    // HELP
     if (content === "/camelhelp") {
       return message.reply(
 `🤖 Camelbot Commands
@@ -102,7 +105,6 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       );
     }
 
-    // LOOKUP
     if (content.startsWith("/lookup ")) {
 
       const query = content.replace("/lookup ", "").trim();
@@ -134,7 +136,6 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       return message.reply(msg);
     }
 
-    // SHOW MOTW
     if (content === "/showmotw") {
 
       let output = "🎬 MOTW SUBMISSIONS\n\n";
@@ -156,7 +157,6 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       return message.reply(output);
     }
 
-    // ENTER MOTW
     if (content === "/entermotw") {
 
       if (state.phase !== "submission") {
@@ -177,11 +177,10 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
   }
 
   // =========================
-  // MOTW FLOW (FIXED FSM)
+  // 4. MOTW FLOW
   // =========================
   if (session?.type === "motw") {
 
-    // SEARCH PHASE
     if (session.step === 1 || session.step === 2) {
 
       const results = await movieSearch(content);
@@ -207,7 +206,6 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       return message.reply(msg);
     }
 
-    // PICK PHASE
     if (session.step === "PICK") {
 
       const num = parseInt(content);
