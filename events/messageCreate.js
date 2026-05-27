@@ -22,20 +22,16 @@ client.on("messageCreate", async (message) => {
   const isPing = message.mentions.users.has(client.user.id);
 
   // =========================
-  // 1. AI ROUTE (HARD STOP)
+  // 1. AI ROUTE (ONLY ON PING)
   // =========================
   if (isPing) {
-
     try {
-
       const prompt = content
         .replace(`<@${client.user.id}>`, "")
         .replace(`<@!${client.user.id}>`, "")
         .trim();
 
-      if (!prompt) {
-        return message.reply("🤖 Ask me something.");
-      }
+      if (!prompt) return message.reply("🤖 Ask me something.");
 
       const response = await askAI(prompt);
 
@@ -48,7 +44,7 @@ client.on("messageCreate", async (message) => {
   }
 
   // =========================
-  // 2. LOOKUP FOLLOW-UP SYSTEM
+  // 2. LOOKUP FOLLOW-UP
   // =========================
   if (pending && pending.channelId === message.channel.id) {
 
@@ -69,11 +65,9 @@ client.on("messageCreate", async (message) => {
     }
 
     const movie = pending.results[num - 1];
-
     delete client.pendingLookups[userId];
 
     try {
-
       const full = await axios.get(
         `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${movie.imdbID}&plot=full`
       );
@@ -88,7 +82,7 @@ Cast: ${m.Actors}
 IMDb: https://www.imdb.com/title/${m.imdbID}/`
       );
 
-    } catch (err) {
+    } catch {
       return message.reply("❌ Failed to fetch movie details.");
     }
   }
@@ -117,11 +111,8 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       );
     }
 
-      // =========================
     // START MOTW
-    // =========================
     if (content === "/startmotw") {
-
       try {
         motw.startMOTW(client);
         return message.reply("🎬 MOTW started.");
@@ -131,11 +122,8 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       }
     }
 
-    // =========================
     // STOP MOTW
-    // =========================
     if (content === "/stopmotw") {
-
       try {
         motw.stopMOTW();
         return message.reply("🛑 MOTW stopped.");
@@ -149,11 +137,9 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
     if (content.startsWith("/lookup ")) {
 
       const query = content.replace("/lookup ", "").trim();
-
       if (!query) return message.reply("❌ Provide a movie name.");
 
       const results = await movieSearch(query);
-
       if (!results.length) return message.reply("❌ No results.");
 
       const top = results.slice(0, 6);
@@ -181,10 +167,9 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
     if (content === "/showmotw") {
 
       const state = motw.loadState();
+      const subs = state.submissions || {};
 
       let output = "🎬 MOTW SUBMISSIONS\n\n";
-
-      const subs = state.submissions || {};
 
       if (Object.keys(subs).length === 0) {
         return message.reply(output + "No submissions yet.");
@@ -228,6 +213,7 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
   // =========================
   if (session?.type === "motw") {
 
+    // SEARCH STEP
     if (session.step === 1 || session.step === 2) {
 
       const results = await movieSearch(content);
@@ -239,7 +225,7 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       session.results = results.slice(0, 6);
 
       let msg =
-`🎬 Pick Movie ${session.selected.length + 1} (0–6)
+`🎬 Pick Movie ${session.step} (0–6)
 0: Cancel
 
 `;
@@ -253,6 +239,7 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       return message.reply(msg);
     }
 
+    // PICK STEP
     if (session.step === "PICK") {
 
       const num = parseInt(content);
@@ -271,15 +258,13 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       }
 
       const movie = session.results[num - 1];
-
       session.selected.push(movie.Title);
 
+      // FINAL SUBMISSION
       if (session.selected.length === 2) {
 
         const state = motw.loadState();
-
         state.submissions[userId] = session.selected;
-
         motw.saveState(state);
 
         client.sessions.delete(userId);
