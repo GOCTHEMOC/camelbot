@@ -1,7 +1,7 @@
 const axios = require("axios");
 const { askAI } = require("../services/ai");
 const { movieSearch } = require("../services/lookup");
-const { getState, saveState } = require("../motwEngine");
+const motw = require("../motwEngine");
 
 module.exports = (client) => {
 
@@ -24,45 +24,33 @@ client.on("messageCreate", async (message) => {
   // =========================
   // 1. AI ROUTE (HARD STOP)
   // =========================
-if (isPing) {
+  if (isPing) {
 
-  try {
+    try {
 
-    const prompt = content
-      .replace(`<@${client.user.id}>`, "")
-      .replace(`<@!${client.user.id}>`, "")
-      .trim();
+      const prompt = content
+        .replace(`<@${client.user.id}>`, "")
+        .replace(`<@!${client.user.id}>`, "")
+        .trim();
 
-    if (!prompt) {
-      return message.reply("🤖 What do you want to ask?");
+      if (!prompt) {
+        return message.reply("🤖 Ask me something.");
+      }
+
+      const response = await askAI(prompt);
+
+      return message.reply(String(response).slice(0, 1900));
+
+    } catch (err) {
+      console.error("AI ERROR:", err);
+      return message.reply("❌ AI error occurred.");
     }
-
-    const response = await askAI(prompt);
-
-    if (!response) {
-      return message.reply("❌ AI failed to respond.");
-    }
-
-    return message.reply(
-      String(response).slice(0, 1900)
-    );
-
-  } catch (err) {
-
-    console.error("AI ERROR:", err);
-
-    return message.reply(
-      "❌ AI error occurred."
-    );
   }
-}
 
   // =========================
-  // 2. LOOKUP FOLLOW-UP
+  // 2. LOOKUP FOLLOW-UP SYSTEM
   // =========================
   if (pending && pending.channelId === message.channel.id) {
-
-    if (!pending.results) return;
 
     const num = parseInt(content);
 
@@ -75,34 +63,34 @@ if (isPing) {
       return message.reply("❌ Lookup cancelled.");
     }
 
-    if (num < 1 || num > pending.results.length) {
+    if (!pending.results || num < 1 || num > pending.results.length) {
       delete client.pendingLookups[userId];
-      return message.reply("❌ Invalid selection. Lookup cancelled.");
+      return message.reply("❌ Invalid selection.");
     }
 
     const movie = pending.results[num - 1];
 
     delete client.pendingLookups[userId];
 
-    let full;
-
     try {
-      full = await axios.get(
+
+      const full = await axios.get(
         `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${movie.imdbID}&plot=full`
       );
-    } catch {
-      return message.reply("❌ Failed to fetch movie details.");
-    }
 
-    const m = full.data;
+      const m = full.data;
 
-    return message.reply(
+      return message.reply(
 `🎬 ${m.Title} (${m.Year})
 Director: ${m.Director}
 Cast: ${m.Actors}
 
 IMDb: https://www.imdb.com/title/${m.imdbID}/`
-    );
+      );
+
+    } catch (err) {
+      return message.reply("❌ Failed to fetch movie details.");
+    }
   }
 
   // =========================
@@ -110,11 +98,8 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
   // =========================
   if (content.startsWith("/")) {
 
-    // =========================
     // HELP
-    // =========================
     if (content === "/camelhelp") {
-
       return message.reply(
 `🤖 Camelbot Commands
 
@@ -132,22 +117,28 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       );
     }
 
-    // =========================
+    // START MOTW
+    if (content === "/startmotw") {
+      motw.startLoop(client);
+      return message.reply("🎬 MOTW started.");
+    }
+
+    // STOP MOTW
+    if (content === "/stopmotw") {
+      motw.stopMOTW();
+      return message.reply("🛑 MOTW stopped.");
+    }
+
     // LOOKUP
-    // =========================
     if (content.startsWith("/lookup ")) {
 
       const query = content.replace("/lookup ", "").trim();
 
-      if (!query) {
-        return message.reply("❌ Provide a movie name.");
-      }
+      if (!query) return message.reply("❌ Provide a movie name.");
 
       const results = await movieSearch(query);
 
-      if (!results.length) {
-        return message.reply("❌ No results.");
-      }
+      if (!results.length) return message.reply("❌ No results.");
 
       const top = results.slice(0, 6);
 
@@ -161,6 +152,7 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
         msg += `${i + 1}. ${m.Title} (${m.Year})\n`;
       });
 
+      client.pendingLookups = client.pendingLookups || {};
       client.pendingLookups[userId] = {
         results: top,
         channelId: message.channel.id
@@ -169,12 +161,10 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       return message.reply(msg);
     }
 
-    // =========================
     // SHOW MOTW
-    // =========================
     if (content === "/showmotw") {
 
-      const state = getState();
+      const state = motw.loadState();
 
       let output = "🎬 MOTW SUBMISSIONS\n\n";
 
@@ -185,28 +175,23 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       }
 
       for (const id in subs) {
-
         output += `👤 ${id}\n`;
-
         subs[id].forEach((m, i) => {
           output += `${i + 1}. ${m}\n`;
         });
-
         output += "\n";
       }
 
       return message.reply(output);
     }
 
-    // =========================
     // ENTER MOTW
-    // =========================
     if (content === "/entermotw") {
 
-      const state = getState();
+      const state = motw.loadState();
 
       if (state.phase !== "submission") {
-        return message.reply("❌ Submissions are currently closed.");
+        return message.reply("❌ Submissions are closed.");
       }
 
       client.sessions.set(userId, {
@@ -227,9 +212,6 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
   // =========================
   if (session?.type === "motw") {
 
-    // =========================
-    // SEARCH STEP
-    // =========================
     if (session.step === 1 || session.step === 2) {
 
       const results = await movieSearch(content);
@@ -255,9 +237,6 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       return message.reply(msg);
     }
 
-    // =========================
-    // PICK STEP
-    // =========================
     if (session.step === "PICK") {
 
       const num = parseInt(content);
@@ -279,16 +258,13 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
 
       session.selected.push(movie.Title);
 
-      // =========================
-      // FINISH
-      // =========================
-      if (session.selected.length >= 2) {
+      if (session.selected.length === 2) {
 
-        const state = getState();
+        const state = motw.loadState();
 
         state.submissions[userId] = session.selected;
 
-        saveState(state);
+        motw.saveState(state);
 
         client.sessions.delete(userId);
 
@@ -300,9 +276,6 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
         );
       }
 
-      // =========================
-      // SECOND MOVIE
-      // =========================
       session.step = 2;
 
       return message.reply("🎬 Now search your SECOND movie.");
