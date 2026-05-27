@@ -15,7 +15,7 @@ client.on("messageCreate", async (message) => {
   const content = message.content.trim();
   const userId = message.author.id;
 
-  const state = loadState();
+  const { state, saveState } = require("../motwEngine");
 
   const session = client.sessions.get(userId);
   const pending = client.pendingLookups?.[userId];
@@ -35,36 +35,58 @@ client.on("messageCreate", async (message) => {
   }
 
   // =========================
-  // 3. LOOKUP FOLLOW-UP INPUT
-  // =========================
   if (pending && pending.channelId === message.channel.id) {
 
-    const num = parseInt(content);
+  const num = parseInt(content);
 
-    if (!isNaN(num)) {
+  // must be a number
+  if (isNaN(num)) {
+    return message.reply("❌ Please reply with a number.");
+  }
 
-      const movie = pending.results[num - 1];
+  // 0 = cancel (VALID)
+  if (num === 0) {
+    delete client.pendingLookups[userId];
+    return message.reply("❌ Lookup cancelled.");
+  }
 
-      if (!movie) return message.reply("❌ Invalid selection.");
+  // ensure results exist
+  if (!pending.results || pending.results.length === 0) {
+    delete client.pendingLookups[userId];
+    return message.reply("❌ Lookup session expired.");
+  }
 
-      delete client.pendingLookups[userId];
+  // range validation
+  if (num < 1 || num > pending.results.length) {
+    delete client.pendingLookups[userId];
+    return message.reply("❌ Invalid selection. Lookup cancelled.");
+  }
 
-      const full = await axios.get(
-        `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${movie.imdbID}&plot=full`
-      );
+  const movie = pending.results[num - 1];
 
-      const m = full.data;
+  // cleanup session early (prevents reuse bugs)
+  delete client.pendingLookups[userId];
 
-      return message.reply(
+  let full;
+
+  try {
+    full = await axios.get(
+      `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${movie.imdbID}&plot=full`
+    );
+  } catch (err) {
+    return message.reply("❌ Failed to fetch movie details.");
+  }
+
+  const m = full.data;
+
+  return message.reply(
 `🎬 ${m.Title} (${m.Year})
 Director: ${m.Director}
 Cast: ${m.Actors}
 
 IMDb: https://www.imdb.com/title/${m.imdbID}/`
-      );
-    }
-  }
-
+  );
+}
   // =========================
   // 4. COMMAND HANDLER (ALL /COMMANDS)
   // =========================
