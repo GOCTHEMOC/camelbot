@@ -92,7 +92,48 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
   // =========================
   if (content.startsWith("/")) {
 
+    const isCommandChannel =
+      message.channel.id === process.env.COMMAND_CHANNEL_ID;
+
+    // =========================
+    // START MOTW (LOCKED)
+    // =========================
+    if (content === "/startmotw") {
+
+      if (!isCommandChannel) {
+        return message.reply("❌ Use this command in the command channel.");
+      }
+
+      try {
+        motw.startMOTW(client);
+        return message.reply("🎬 MOTW started.");
+      } catch (err) {
+        console.error(err);
+        return message.reply("❌ Failed to start MOTW.");
+      }
+    }
+
+    // =========================
+    // STOP MOTW (LOCKED)
+    // =========================
+    if (content === "/stopmotw") {
+
+      if (!isCommandChannel) {
+        return message.reply("❌ Use this command in the command channel.");
+      }
+
+      try {
+        motw.stopMOTW();
+        return message.reply("🛑 MOTW stopped.");
+      } catch (err) {
+        console.error(err);
+        return message.reply("❌ Failed to stop MOTW.");
+      }
+    }
+
+    // =========================
     // HELP
+    // =========================
     if (content === "/camelhelp") {
       return message.reply(
 `🤖 Camelbot Commands
@@ -111,29 +152,9 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       );
     }
 
-    // START MOTW
-    if (content === "/startmotw") {
-      try {
-        motw.startMOTW(client);
-        return message.reply("🎬 MOTW started.");
-      } catch (err) {
-        console.error(err);
-        return message.reply("❌ Failed to start MOTW.");
-      }
-    }
-
-    // STOP MOTW
-    if (content === "/stopmotw") {
-      try {
-        motw.stopMOTW();
-        return message.reply("🛑 MOTW stopped.");
-      } catch (err) {
-        console.error(err);
-        return message.reply("❌ Failed to stop MOTW.");
-      }
-    }
-
+    // =========================
     // LOOKUP
+    // =========================
     if (content.startsWith("/lookup ")) {
 
       const query = content.replace("/lookup ", "").trim();
@@ -163,7 +184,9 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       return message.reply(msg);
     }
 
+    // =========================
     // SHOW MOTW
+    // =========================
     if (content === "/showmotw") {
 
       const state = motw.loadState();
@@ -186,13 +209,15 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       return message.reply(output);
     }
 
+    // =========================
     // ENTER MOTW
+    // =========================
     if (content === "/entermotw") {
 
       const state = motw.loadState();
 
       if (state.phase !== "submission") {
-        return message.reply("❌ Submissions are closed.");
+        return message.reply("❌ MOTW is currently closed.");
       }
 
       client.sessions.set(userId, {
@@ -213,7 +238,12 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
   // =========================
   if (session?.type === "motw") {
 
-    // SEARCH STEP
+    const state = motw.loadState();
+    if (state.phase !== "submission") {
+      client.sessions.delete(userId);
+      return message.reply("❌ MOTW is currently closed.");
+    }
+
     if (session.step === 1 || session.step === 2) {
 
       const results = await movieSearch(content);
@@ -239,7 +269,6 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       return message.reply(msg);
     }
 
-    // PICK STEP
     if (session.step === "PICK") {
 
       const num = parseInt(content);
@@ -260,7 +289,6 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       const movie = session.results[num - 1];
       session.selected.push(movie.Title);
 
-      // FINAL SUBMISSION
       if (session.selected.length === 2) {
 
         const state = motw.loadState();
