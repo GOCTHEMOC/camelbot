@@ -1,33 +1,26 @@
 const axios = require("axios");
 const { askAI } = require("../services/ai");
 const { movieSearch } = require("../services/lookup");
-const { loadState, saveState } = require("../motwEngine");
+const { state, saveState } = require("../motwEngine");
 
 module.exports = (client) => {
 
 client.on("messageCreate", async (message) => {
 
-  // =========================
-  // 1. BASIC SAFETY GUARD
-  // =========================
   if (message.author.bot) return;
 
   const content = message.content.trim();
   const userId = message.author.id;
 
-  const { state, saveState } = require("../motwEngine");
-
   const session = client.sessions.get(userId);
   const pending = client.pendingLookups?.[userId];
 
   // =========================
-  // 2. AI MENTION HANDLER (ONLY WHEN PINGED)
+  // AI MENTION
   // =========================
-  if (message.mentions.has(client.user)) {
+  if (message.content.startsWith(`<@${client.user.id}>`)) {
 
-    const prompt = content
-      .replace(`<@${client.user.id}>`, "")
-      .trim();
+    const prompt = content.replace(`<@${client.user.id}>`, "").trim();
 
     const response = await askAI(prompt);
 
@@ -35,64 +28,61 @@ client.on("messageCreate", async (message) => {
   }
 
   // =========================
+  // LOOKUP FOLLOW-UP
+  // =========================
   if (pending && pending.channelId === message.channel.id) {
 
-  const num = parseInt(content);
+    const num = parseInt(content);
 
-  // must be a number
-  if (isNaN(num)) {
-    return message.reply("❌ Please reply with a number.");
-  }
+    if (isNaN(num)) {
+      return message.reply("❌ Please reply with a number.");
+    }
 
-  // 0 = cancel (VALID)
-  if (num === 0) {
+    if (num === 0) {
+      delete client.pendingLookups[userId];
+      return message.reply("❌ Lookup cancelled.");
+    }
+
+    if (!pending.results || pending.results.length === 0) {
+      delete client.pendingLookups[userId];
+      return message.reply("❌ Lookup session expired.");
+    }
+
+    if (num < 1 || num > pending.results.length) {
+      delete client.pendingLookups[userId];
+      return message.reply("❌ Invalid selection. Lookup cancelled.");
+    }
+
+    const movie = pending.results[num - 1];
+
     delete client.pendingLookups[userId];
-    return message.reply("❌ Lookup cancelled.");
-  }
 
-  // ensure results exist
-  if (!pending.results || pending.results.length === 0) {
-    delete client.pendingLookups[userId];
-    return message.reply("❌ Lookup session expired.");
-  }
+    let full;
 
-  // range validation
-  if (num < 1 || num > pending.results.length) {
-    delete client.pendingLookups[userId];
-    return message.reply("❌ Invalid selection. Lookup cancelled.");
-  }
+    try {
+      full = await axios.get(
+        `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${movie.imdbID}&plot=full`
+      );
+    } catch {
+      return message.reply("❌ Failed to fetch movie details.");
+    }
 
-  const movie = pending.results[num - 1];
+    const m = full.data;
 
-  // cleanup session early (prevents reuse bugs)
-  delete client.pendingLookups[userId];
-
-  let full;
-
-  try {
-    full = await axios.get(
-      `https://www.omdbapi.com/?apikey=${process.env.OMDB_API_KEY}&i=${movie.imdbID}&plot=full`
-    );
-  } catch (err) {
-    return message.reply("❌ Failed to fetch movie details.");
-  }
-
-  const m = full.data;
-
-  return message.reply(
+    return message.reply(
 `🎬 ${m.Title} (${m.Year})
 Director: ${m.Director}
 Cast: ${m.Actors}
 
 IMDb: https://www.imdb.com/title/${m.imdbID}/`
-  );
-}
+    );
+  }
+
   // =========================
-  // 4. COMMAND HANDLER (ALL /COMMANDS)
+  // COMMANDS
   // =========================
   if (content.startsWith("/")) {
 
-    // HELP
     if (content === "/camelhelp") {
       return message.reply(
 `🤖 Camelbot Commands
@@ -123,7 +113,7 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
 
       const top = results.slice(0, 6);
 
-      let msg = "🎬 Pick a movie (1–6):\n\n";
+      let msg = "🎬 Pick a movie (0–6):\n0: Cancel\n\n";
 
       top.forEach((m, i) => {
         msg += `${i + 1}. ${m.Title} (${m.Year})\n`;
@@ -181,26 +171,23 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
   }
 
   // =========================
-  // 5. MOTW SESSION HANDLER
+  // MOTW FLOW
   // =========================
   if (session?.type === "motw") {
 
-    // SEARCH STEP
     if (session.step === 1 || session.step === 2) {
 
       const results = await movieSearch(content);
 
       if (!results.length) {
-        return message.reply("❌ No results. Try again.");
+        return message.reply("❌ No results.");
       }
 
-      const top = results.slice(0, 6);
-
-      session.results = top;
+      session.results = results.slice(0, 6);
 
       let msg = `🎬 Pick Movie ${session.step} (1–6):\n\n`;
 
-      top.forEach((m, i) => {
+      session.results.forEach((m, i) => {
         msg += `${i + 1}. ${m.Title} (${m.Year})\n`;
       });
 
@@ -209,7 +196,6 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
       return message.reply(msg);
     }
 
-    // PICK STEP
     if (session.step === "pick") {
 
       const num = parseInt(content);
