@@ -2,7 +2,8 @@ const axios = require("axios");
 const { askAI } = require("../services/ai");
 const { movieSearch } = require("../services/lookup");
 const motw = require("../motwEngine");
-
+const isCommandChannel =
+  message.channel.id === process.env.COMMAND_CHANNEL_ID;
 module.exports = (client) => {
 
 client.on("messageCreate", async (message) => {
@@ -101,7 +102,7 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
     if (content === "/startmotw") {
 
       if (!isCommandChannel) {
-        return message.reply("❌ Use this command in the command channel.");
+        return message.reply("ur not a mod sybau");
       }
 
       try {
@@ -119,7 +120,7 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
     if (content === "/stopmotw") {
 
       if (!isCommandChannel) {
-        return message.reply("❌ Use this command in the command channel.");
+        return message.reply("ur not a mod sybau");
       }
 
       try {
