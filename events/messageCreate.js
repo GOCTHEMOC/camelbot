@@ -16,11 +16,15 @@ client.on("messageCreate", async (message) => {
   const pending = client.pendingLookups?.[userId];
 
   // =========================
-  // AI MENTION
+  // AI MENTION HANDLER
   // =========================
-  if (message.content.startsWith(`<@${client.user.id}>`)) {
-
-    const prompt = content.replace(`<@${client.user.id}>`, "").trim();
+  if (
+    message.mentions.users.has(client.user.id)
+  ) {
+    const prompt = content
+      .replace(`<@${client.user.id}>`, "")
+      .replace(`<@!${client.user.id}>`, "")
+      .trim();
 
     const response = await askAI(prompt);
 
@@ -32,6 +36,8 @@ client.on("messageCreate", async (message) => {
   // =========================
   if (pending && pending.channelId === message.channel.id) {
 
+    if (!pending.results) return;
+
     const num = parseInt(content);
 
     if (isNaN(num)) {
@@ -41,11 +47,6 @@ client.on("messageCreate", async (message) => {
     if (num === 0) {
       delete client.pendingLookups[userId];
       return message.reply("❌ Lookup cancelled.");
-    }
-
-    if (!pending.results || pending.results.length === 0) {
-      delete client.pendingLookups[userId];
-      return message.reply("❌ Lookup session expired.");
     }
 
     if (num < 1 || num > pending.results.length) {
@@ -83,6 +84,7 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
   // =========================
   if (content.startsWith("/")) {
 
+    // HELP
     if (content === "/camelhelp") {
       return message.reply(
 `🤖 Camelbot Commands
@@ -113,7 +115,11 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
 
       const top = results.slice(0, 6);
 
-      let msg = "🎬 Pick a movie (0–6):\n0: Cancel\n\n";
+      let msg =
+`🎬 Pick a movie (0–6)
+0: Cancel
+
+`;
 
       top.forEach((m, i) => {
         msg += `${i + 1}. ${m.Title} (${m.Year})\n`;
@@ -171,10 +177,11 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
   }
 
   // =========================
-  // MOTW FLOW
+  // MOTW FLOW (FIXED FSM)
   // =========================
   if (session?.type === "motw") {
 
+    // SEARCH PHASE
     if (session.step === 1 || session.step === 2) {
 
       const results = await movieSearch(content);
@@ -185,22 +192,37 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
 
       session.results = results.slice(0, 6);
 
-      let msg = `🎬 Pick Movie ${session.step} (1–6):\n\n`;
+      let msg =
+`🎬 Pick Movie ${session.step} (0–6)
+0: Cancel
+
+`;
 
       session.results.forEach((m, i) => {
         msg += `${i + 1}. ${m.Title} (${m.Year})\n`;
       });
 
-      session.step = "pick";
+      session.step = "PICK";
 
       return message.reply(msg);
     }
 
-    if (session.step === "pick") {
+    // PICK PHASE
+    if (session.step === "PICK") {
 
       const num = parseInt(content);
 
-      if (isNaN(num) || num < 1 || num > session.results.length) {
+      if (isNaN(num)) {
+        return message.reply("❌ Please reply with a number.");
+      }
+
+      if (num === 0) {
+        client.sessions.delete(userId);
+        return message.reply("❌ Cancelled.");
+      }
+
+      if (num < 1 || num > session.results.length) {
+        client.sessions.delete(userId);
         return message.reply("❌ Invalid choice.");
       }
 
