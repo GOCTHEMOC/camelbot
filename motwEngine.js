@@ -1,128 +1,164 @@
 const fs = require("fs");
 
-const statePath = "./motwState.json";
+const STATE_FILE = "./motwState.json";
+
+let running = false;
 
 function loadState() {
-  return JSON.parse(fs.readFileSync(statePath, "utf8"));
+  return JSON.parse(fs.readFileSync(STATE_FILE));
 }
 
 function saveState(state) {
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  fs.writeFileSync(
+    STATE_FILE,
+    JSON.stringify(state, null, 2)
+  );
 }
 
-let state = loadState();
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-const DAY = 24 * 60 * 60 * 1000;
+async function startSubmission(client) {
 
-const SUBMISSION = 4 * DAY;
-const POLLING = 2 * DAY;
-const REST = 1 * DAY;
+  const state = loadState();
 
-function startSubmission(client) {
-
-  state.active = true;
   state.phase = "submission";
-  state.phaseEndsAt = Date.now() + SUBMISSION;
-  state.weekIndex += 1;
   state.submissions = {};
-  state.votes = {};
+  state.poll = [];
 
   saveState(state);
 
-  const guild = client.guilds.cache.first();
+  const movieChannel = await client.channels.fetch(
+    process.env.MOVIE_CHANNEL_ID
+  );
 
-  const channel =
-    guild.channels.cache.find(c => c.name === "movieoftheweek");
+  await movieChannel.send(
+`🎬 MOVIE OF THE WEEK STARTED
 
-  if (channel) {
-    channel.send(`🎬 MOTW Week ${state.weekIndex} submissions are OPEN.`);
-  }
+Submissions are OPEN for 4 days.
+
+Use:
+/entermotw`
+  );
 }
 
-function startPolling(client) {
+async function startPolling(client) {
+
+  const state = loadState();
 
   state.phase = "polling";
-  state.phaseEndsAt = Date.now() + POLLING;
 
   saveState(state);
 
-  const guild = client.guilds.cache.first();
+  const movieChannel = await client.channels.fetch(
+    process.env.MOVIE_CHANNEL_ID
+  );
 
-  const channel =
-    guild.channels.cache.find(c => c.name === "movieoftheweek");
+  let movies = [];
 
-  if (channel) {
-    channel.send(`🗳 Voting has started.`);
-  }
+  Object.values(state.submissions).forEach(arr => {
+    movies.push(...arr);
+  });
+
+  movies = [...new Set(movies)];
+
+  state.poll = movies;
+
+  saveState(state);
+
+  let msg =
+`🗳️ POLLING HAS BEGUN
+
+Vote by replying with a number.
+
+`;
+
+  movies.forEach((m, i) => {
+    msg += `${i + 1}. ${m}\n`;
+  });
+
+  await movieChannel.send(msg);
 }
 
-function startRest(client) {
+async function endPolling(client) {
+
+  const state = loadState();
+
+  const movieChannel = await client.channels.fetch(
+    process.env.MOVIE_CHANNEL_ID
+  );
+
+  // TEMP WINNER PICK
+  const winner =
+    state.poll[Math.floor(Math.random() * state.poll.length)];
+
+  await movieChannel.send(
+`🏆 MOVIE OF THE WEEK WINNER
+
+🎬 ${winner}`
+  );
 
   state.phase = "rest";
-  state.phaseEndsAt = Date.now() + REST;
 
   saveState(state);
-
-  const guild = client.guilds.cache.first();
-
-  const channel =
-    guild.channels.cache.find(c => c.name === "movieoftheweek");
-
-  if (channel) {
-    channel.send(`😴 Rest day.`);
-  }
 }
 
-function resetWeek() {
+async function restDay(client) {
+
+  const state = loadState();
+
+  const movieChannel = await client.channels.fetch(
+    process.env.MOVIE_CHANNEL_ID
+  );
+
+  await movieChannel.send(
+`🛌 REST DAY
+
+Next MOTW cycle starts tomorrow.`
+  );
 
   state.submissions = {};
-  state.votes = {};
+  state.poll = [];
+  state.phase = "submission";
 
   saveState(state);
+}
+
+async function startLoop(client) {
+
+  if (running) return;
+
+  running = true;
+
+  while (running) {
+
+    // 4 DAYS SUBMISSIONS
+    await startSubmission(client);
+    await wait(4 * 24 * 60 * 60 * 1000);
+
+    // 2 DAYS POLLING
+    await startPolling(client);
+    await wait(2 * 24 * 60 * 60 * 1000);
+
+    // WINNER
+    await endPolling(client);
+
+    // 1 DAY REST
+    await wait(1 * 24 * 60 * 60 * 1000);
+
+    await restDay(client);
+  }
 }
 
 function stopMOTW() {
-
-  state.active = false;
-  state.phase = "inactive";
-
-  saveState(state);
-}
-
-function startLoop(client) {
-
-  setInterval(() => {
-
-    state = loadState();
-
-    if (!state.active) return;
-
-    const now = Date.now();
-
-    if (now < state.phaseEndsAt) return;
-
-    if (state.phase === "submission") {
-      startPolling(client);
-    }
-
-    else if (state.phase === "polling") {
-      startRest(client);
-    }
-
-    else if (state.phase === "rest") {
-      resetWeek();
-      startSubmission(client);
-    }
-
-  }, 60000);
-
+  running = false;
 }
 
 module.exports = {
-  state,
-  saveState,
-  loadState,
+  startLoop,
   startSubmission,
   stopMOTW,
-  startLoop
+  loadState,
+  saveState
 };
