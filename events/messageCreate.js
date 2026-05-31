@@ -2,8 +2,7 @@ const axios = require("axios");
 const { askAI } = require("../services/ai");
 const { movieSearch } = require("../services/lookup");
 const motw = require("../motwEngine");
-const isCommandChannel =
-  message.channel.id === process.env.COMMAND_CHANNEL_ID;
+
 module.exports = (client) => {
 
 client.on("messageCreate", async (message) => {
