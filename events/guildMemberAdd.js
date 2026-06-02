@@ -1,7 +1,6 @@
 module.exports = (client) => {
 
-  client.on("guildMemberAdd",
-  async (member) => {
+  client.on("guildMemberAdd", async (member) => {
 
     try {
 
@@ -11,7 +10,9 @@ module.exports = (client) => {
 Go to #verify and react there.`
       );
 
-    } catch {}
+    } catch (err) {
+      console.error("❌ Failed to send welcome DM to", member.user.tag, ":", err.message);
+    }
 
   });
 
