@@ -29,45 +29,55 @@ async function handleLetterboxdDM(client, message) {
       VALUES (?, ?)
     `).run(message.author.id, url);
 
-    const guild = client.guilds.cache.first();
+    // ✅ FIX #9: Use guild from message author's current server
+    const guild = message.guild;
 
     if (!guild) {
-      console.error("❌ No guild found in cache");
+      console.error("❌ No guild context found");
       return message.reply("❌ Bot configuration error. Please contact admin.");
     }
 
-    const member =
-      await guild.members.fetch(message.author.id).catch(err => {
-        console.error("❌ Failed to fetch member:", err);
-        return null;
-      });
+    const member = await guild.members.fetch(message.author.id).catch(err => {
+      console.error("❌ Failed to fetch member:", err);
+      return null;
+    });
 
     if (!member) {
       return message.reply("❌ Could not find you in the server.");
     }
 
-    const role =
-      guild.roles.cache.find(r => r.name === "Letterboxd");
-
-    if (role) {
-      await member.roles.add(role).catch(err => {
-        console.error("❌ Failed to add Letterboxd role:", err);
-      });
+    // ✅ FIX #9: Use LETTERBOXD_ROLE_ID from environment instead of searching by name
+    const roleId = process.env.LETTERBOXD_ROLE_ID;
+    if (!roleId) {
+      console.warn("⚠️  LETTERBOXD_ROLE_ID not configured in .env");
     } else {
-      console.warn("⚠️  Letterboxd role not found in guild");
+      const role = guild.roles.cache.get(roleId);
+      
+      if (role) {
+        await member.roles.add(role).catch(err => {
+          console.error("❌ Failed to add Letterboxd role:", err);
+        });
+      } else {
+        console.warn("⚠️  Letterboxd role not found in guild with ID:", roleId);
+      }
     }
 
-    const channel =
-      guild.channels.cache.find(c => c.name === "letterboxd");
-
-    if (channel) {
-      await channel.send(
-        `🎬 ${member.user.tag} linked Letterboxd:\n${url}`
-      ).catch(err => {
-        console.error("❌ Failed to send announcement:", err);
-      });
+    // ✅ FIX #9: Use LETTERBOXD_CHANNEL_ID from environment instead of searching by name
+    const channelId = process.env.LETTERBOXD_CHANNEL_ID;
+    if (!channelId) {
+      console.warn("⚠️  LETTERBOXD_CHANNEL_ID not configured in .env");
     } else {
-      console.warn("⚠️  Letterboxd channel not found in guild");
+      const channel = guild.channels.cache.get(channelId);
+
+      if (channel) {
+        await channel.send(
+          `🎬 ${member.user.tag} linked Letterboxd:\n${url}`
+        ).catch(err => {
+          console.error("❌ Failed to send announcement:", err);
+        });
+      } else {
+        console.warn("⚠️  Letterboxd channel not found in guild with ID:", channelId);
+      }
     }
 
     return message.reply("✅ Thanks! Letterboxd linked.");
