@@ -226,6 +226,11 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
     if (content === "/entermotw") {
 
       try {
+        // ✅ FIX #5: Check if user already has an active session
+        if (client.sessions.has(userId)) {
+          return message.reply("❌ You already have an active MOTW session. Cancel it first or complete it.");
+        }
+
         const state = motw.ensureState();
 
         if (state.phase !== "submission") {
@@ -261,6 +266,7 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
         return message.reply("❌ MOTW is currently closed.");
       }
 
+      // ✅ FIX #6: Use consistent number types for step
       if (session.step === 1 || session.step === 2) {
 
         const results = await movieSearch(content);
@@ -281,12 +287,14 @@ IMDb: https://www.imdb.com/title/${m.imdbID}/`
           msg += `${i + 1}. ${m.Title} (${m.Year})\n`;
         });
 
-        session.step = "PICK";
+        // ✅ FIX #6: Set step to number 3 (PICK state) instead of string "PICK"
+        session.step = 3;
 
         return message.reply(msg);
       }
 
-      if (session.step === "PICK") {
+      // ✅ FIX #6: Check for step === 3 instead of "PICK"
+      if (session.step === 3) {
 
         const num = parseInt(content);
 
