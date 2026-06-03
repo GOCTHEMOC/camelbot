@@ -26,7 +26,7 @@ client.on("messageCreate", async (message) => {
   for (const phrase of disrespectfulPhrases) {
     if (content.includes(phrase)) {
       try {
-        await message.reply("HEY, we respect women around here 👎 :freshman_fanatic: 👎 :freshman_fanatic: 👎 :freshman_fanatic: 👎 :freshman_fanatic:");
+        await message.reply("HEY, we respect women around here 👎 <:freshman_fanatic:1501449425447555262> 👎 <:freshman_fanatic:1501449425447555262> 👎 <:freshman_fanatic:1501449425447555262> 👎 <:freshman_fanatic:1501449425447555262>");
       } catch (err) {
         console.error("❌ Failed to send women respect message:", err);
       }
