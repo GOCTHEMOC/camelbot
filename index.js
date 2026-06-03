@@ -37,6 +37,7 @@ client.pendingLookups = {};
 require("./events/messageCreate")(client);
 require("./events/reactionAdd")(client);
 require("./events/guildMemberAdd")(client);
+require("./events/womenRespect")(client);
 
 // motw engine (ONLY ONCE)
 const motw = require("./motwEngine");
