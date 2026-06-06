@@ -20,7 +20,8 @@ client.on("messageCreate", async (message) => {
     "women...",
     "ofc its a women",
     "ofc it is a women",
-    "of course it is a women"
+    "of course it is a women",
+    "women smh"
   ];
 
   for (const phrase of disrespectfulPhrases) {
